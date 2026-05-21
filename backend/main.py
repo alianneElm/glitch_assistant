@@ -1,6 +1,8 @@
 import logging
+import os
 
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
 
 from backend.channels.whatsapp import router as whatsapp_router
 from backend.config import settings
@@ -13,6 +15,15 @@ logging.basicConfig(
 app = FastAPI(title="Glitch Assistant", version="0.1.0")
 
 app.include_router(whatsapp_router)
+
+
+@app.get("/audio/{filename}")
+async def serve_audio(filename: str):
+    """Serve temporary audio files for Twilio to fetch."""
+    filepath = os.path.join("/tmp", filename)
+    if not os.path.exists(filepath):
+        return {"error": "not found"}
+    return FileResponse(filepath, media_type="audio/mpeg")
 
 
 @app.get("/")

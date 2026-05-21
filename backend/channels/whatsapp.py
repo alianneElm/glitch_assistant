@@ -1,4 +1,5 @@
 import logging
+import os
 
 from fastapi import APIRouter, Form, Request, Response
 from twilio.request_validator import RequestValidator
@@ -6,6 +7,8 @@ from twilio.rest import Client
 
 from backend.agent.brain import get_response
 from backend.config import settings
+from backend.services.transcription import transcribe_audio
+from backend.services.voice import generate_voice
 
 logger = logging.getLogger(__name__)
 
@@ -14,12 +17,16 @@ router = APIRouter(prefix="/webhook", tags=["whatsapp"])
 twilio_client = Client(settings.twilio_account_sid, settings.twilio_auth_token)
 validator = RequestValidator(settings.twilio_auth_token)
 
+# Public base URL for serving audio files
+_BASE_URL = os.environ.get(
+    "RAILWAY_PUBLIC_DOMAIN",
+    f"localhost:{settings.port}",
+)
+
 
 def _validate_twilio_request(request: Request, form_data: dict) -> bool:
     if settings.environment == "development":
         return True
-    # Behind Railway's reverse proxy, the internal URL differs from
-    # what Twilio signed. Reconstruct the public URL from headers.
     proto = request.headers.get("x-forwarded-proto", "https")
     host = request.headers.get("x-forwarded-host", request.headers.get("host", ""))
     url = f"{proto}://{host}{request.url.path}"
@@ -42,12 +49,22 @@ async def whatsapp_webhook(
 
     user_id = From
     message = Body.strip()
+    is_voice = False
+
+    if not message and NumMedia > 0 and MediaContentType0 and "audio" in MediaContentType0:
+        is_voice = True
+        logger.info("Voice note received from %s, transcribing...", user_id)
+        message = await transcribe_audio(
+            MediaUrl0,
+            settings.twilio_account_sid,
+            settings.twilio_auth_token,
+        )
+        if not message:
+            _send_whatsapp_message(user_id, "No logré entender el audio. ¿Puedes intentar de nuevo? 🎤")
+            return Response(content="<Response></Response>", media_type="application/xml")
 
     if not message:
-        if NumMedia > 0 and MediaContentType0 and "audio" in MediaContentType0:
-            message = "[voice note received — transcription coming soon]"
-        else:
-            message = "[empty message]"
+        message = "[empty message]"
 
     logger.info("Message from %s: %s", user_id, message[:100])
 
@@ -57,7 +74,18 @@ async def whatsapp_webhook(
         logger.exception("Error generating response")
         reply = "Oops, algo falló en mi cerebro. Dame un momento y vuelve a intentarlo. 🔧"
 
-    _send_whatsapp_message(user_id, reply)
+    # If the user sent a voice note, respond with voice + text
+    logger.info("is_voice=%s, elevenlabs_key=%s, base_url=%s", is_voice, bool(settings.elevenlabs_api_key), _BASE_URL)
+    if is_voice and settings.elevenlabs_api_key:
+        audio_path = generate_voice(reply)
+        if audio_path:
+            filename = os.path.basename(audio_path)
+            audio_url = f"https://{_BASE_URL}/audio/{filename}"
+            _send_whatsapp_voice(user_id, reply, audio_url)
+        else:
+            _send_whatsapp_message(user_id, reply)
+    else:
+        _send_whatsapp_message(user_id, reply)
 
     return Response(content="<Response></Response>", media_type="application/xml")
 
@@ -78,4 +106,15 @@ def _send_whatsapp_message(to: str, body: str):
         from_=settings.twilio_whatsapp_number,
         to=to,
         body=body,
+    )
+
+
+def _send_whatsapp_voice(to: str, body: str, media_url: str):
+    """Send a WhatsApp message with voice audio attached."""
+    to = _normalize_whatsapp_number(to)
+    twilio_client.messages.create(
+        from_=settings.twilio_whatsapp_number,
+        to=to,
+        body=body,
+        media_url=[media_url],
     )

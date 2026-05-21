@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     twilio_whatsapp_number: str = "whatsapp:+14155238886"
     my_whatsapp_number: str = "whatsapp:+46762547179"
 
+    openai_api_key: str = ""
+    groq_api_key: str = ""
+
     elevenlabs_api_key: str = ""
     elevenlabs_voice_id: str = "oSMrjv0Y90fQz1KX393H"
     elevenlabs_model: str = "eleven_multilingual_v2"
