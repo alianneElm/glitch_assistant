@@ -18,7 +18,11 @@ validator = RequestValidator(settings.twilio_auth_token)
 def _validate_twilio_request(request: Request, form_data: dict) -> bool:
     if settings.environment == "development":
         return True
-    url = str(request.url)
+    # Behind Railway's reverse proxy, the internal URL differs from
+    # what Twilio signed. Reconstruct the public URL from headers.
+    proto = request.headers.get("x-forwarded-proto", "https")
+    host = request.headers.get("x-forwarded-host", request.headers.get("host", ""))
+    url = f"{proto}://{host}{request.url.path}"
     signature = request.headers.get("X-Twilio-Signature", "")
     return validator.validate(url, form_data, signature)
 

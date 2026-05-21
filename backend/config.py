@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -6,8 +5,10 @@ from pydantic_settings import BaseSettings
 
 _ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 
-# Load .env with override=True so it takes priority over empty shell vars
-load_dotenv(_ENV_PATH, override=True)
+# In dev, load .env with override so it wins over empty shell vars.
+# In production (Railway), this is a no-op since the file won't exist.
+if _ENV_PATH.exists():
+    load_dotenv(_ENV_PATH, override=True)
 
 
 class Settings(BaseSettings):
@@ -32,7 +33,10 @@ class Settings(BaseSettings):
     port: int = 8000
     environment: str = "development"
 
-    model_config = {"env_file": str(_ENV_PATH), "env_file_encoding": "utf-8"}
+    model_config = {
+        "env_file": str(_ENV_PATH) if _ENV_PATH.exists() else None,
+        "env_file_encoding": "utf-8",
+    }
 
 
 settings = Settings()
