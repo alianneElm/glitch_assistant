@@ -215,6 +215,18 @@ def create_event(summary: str, start_time: str, duration_minutes: int = 60, desc
     start_dt = datetime.fromisoformat(start_time)
     end_dt = start_dt + timedelta(minutes=duration_minutes)
 
+    # Check for conflicts across ALL calendars before creating
+    existing = _query_all_calendars(
+        service,
+        start_dt.isoformat(),
+        end_dt.isoformat(),
+    )
+    if existing:
+        conflict_names = [e.get("summary", "Sin título") for e in existing[:3]]
+        conflicts_str = ", ".join(conflict_names)
+        logger.warning("Event conflict detected: '%s' conflicts with: %s", summary, conflicts_str)
+        return f"❌ Conflicto: ya tienes '{conflicts_str}' a esa hora. Elige otro horario."
+
     event = {
         "summary": summary,
         "start": {
