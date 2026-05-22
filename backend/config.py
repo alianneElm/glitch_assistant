@@ -25,6 +25,12 @@ class Settings(BaseSettings):
     elevenlabs_voice_id: str = "oSMrjv0Y90fQz1KX393H"
     elevenlabs_model: str = "eleven_multilingual_v2"
 
+    google_token_json: str = ""
+
+    vapi_api_key: str = ""
+    vapi_assistant_id: str = ""
+    vapi_phone_number_id: str = ""
+
     database_url: str = ""
     redis_url: str = ""
 

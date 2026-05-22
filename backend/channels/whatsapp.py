@@ -1,7 +1,8 @@
+import asyncio
 import logging
 import os
 
-from fastapi import APIRouter, Form, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Form, Request, Response
 from twilio.request_validator import RequestValidator
 from twilio.rest import Client
 
@@ -37,6 +38,7 @@ def _validate_twilio_request(request: Request, form_data: dict) -> bool:
 @router.post("/whatsapp")
 async def whatsapp_webhook(
     request: Request,
+    background_tasks: BackgroundTasks,
     From: str = Form(...),
     Body: str = Form(""),
     NumMedia: int = Form(0),
@@ -47,24 +49,44 @@ async def whatsapp_webhook(
     if not _validate_twilio_request(request, form_data):
         return Response(status_code=403)
 
-    user_id = From
-    message = Body.strip()
+    # Respond to Twilio immediately, process in background
+    background_tasks.add_task(
+        _process_message,
+        user_id=From,
+        body=Body.strip(),
+        num_media=NumMedia,
+        media_url=MediaUrl0,
+        media_type=MediaContentType0,
+    )
+
+    return Response(content="<Response></Response>", media_type="application/xml")
+
+
+async def _process_message(
+    user_id: str,
+    body: str,
+    num_media: int,
+    media_url: str | None,
+    media_type: str | None,
+):
+    """Process the message in the background after responding to Twilio."""
+    message = body
     is_voice = False
 
-    if not message and NumMedia > 0 and MediaContentType0 and "audio" in MediaContentType0:
+    if not message and num_media > 0 and media_type and "audio" in media_type:
         is_voice = True
         logger.info("Voice note received from %s, transcribing...", user_id)
         message = await transcribe_audio(
-            MediaUrl0,
+            media_url,
             settings.twilio_account_sid,
             settings.twilio_auth_token,
         )
         if not message:
             _send_whatsapp_message(user_id, "No logré entender el audio. ¿Puedes intentar de nuevo? 🎤")
-            return Response(content="<Response></Response>", media_type="application/xml")
+            return
 
     if not message:
-        message = "[empty message]"
+        return
 
     logger.info("Message from %s: %s", user_id, message[:100])
 
@@ -75,7 +97,6 @@ async def whatsapp_webhook(
         reply = "Oops, algo falló en mi cerebro. Dame un momento y vuelve a intentarlo. 🔧"
 
     # If the user sent a voice note, respond with voice + text
-    logger.info("is_voice=%s, elevenlabs_key=%s, base_url=%s", is_voice, bool(settings.elevenlabs_api_key), _BASE_URL)
     if is_voice and settings.elevenlabs_api_key:
         audio_path = generate_voice(reply)
         if audio_path:
@@ -86,8 +107,6 @@ async def whatsapp_webhook(
             _send_whatsapp_message(user_id, reply)
     else:
         _send_whatsapp_message(user_id, reply)
-
-    return Response(content="<Response></Response>", media_type="application/xml")
 
 
 def _normalize_whatsapp_number(number: str) -> str:
