@@ -64,14 +64,14 @@ def make_phone_call(
 
     # Default first message if not provided
     if not first_message:
-        # Build a short greeting that goes straight to the point
-        objective_short = objective.split(".")[0]  # First sentence of objective
+        # Build a natural greeting that explains why an assistant is calling
+        objective_short = objective.split(".")[0]
         if language == "sv":
-            first_message = f"Hej! Jag är Glitch, Aliannes assistent. Jag ringer angående {objective_short}."
+            first_message = f"Hej! Jag är Glitch, Aliannes assistent. Jag ringer för att Alianne är upptagen just nu men hon vill {objective_short.lower()}."
         elif language == "es":
-            first_message = f"¡Hola! Soy Glitch, el asistente de Alianne. Te llamo por {objective_short}."
+            first_message = f"¡Hola! Soy Glitch, el asistente de Alianne. Te llamo porque Alianne está ocupada ahora mismo pero quiere {objective_short.lower()}."
         else:
-            first_message = f"Hi! I'm Glitch, Alianne's assistant. I'm calling about {objective_short}."
+            first_message = f"Hi! I'm Glitch, Alianne's assistant. I'm calling because Alianne is busy right now but she'd like to {objective_short.lower()}."
 
     # Map language to Deepgram transcriber language codes
     transcriber_languages = {"sv": "sv", "es": "es", "en": "en"}
