@@ -32,28 +32,16 @@ COLOR_VERSE = (168, 85, 247)      # Purple
 
 def _find_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
     """Find the best available font."""
-    font_paths = []
     if bold:
         font_paths = [
-            "/usr/share/fonts/truetype/inter/Inter-Bold.ttf",
-            "/usr/share/fonts/opentype/inter/Inter-Bold.otf",
             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
         ]
     else:
         font_paths = [
-            "/usr/share/fonts/truetype/inter/Inter-Regular.ttf",
-            "/usr/share/fonts/opentype/inter/Inter-Regular.otf",
             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
         ]
-
-    # Also check for any Inter variant
-    for pattern_dir in ["/usr/share/fonts/truetype/inter", "/usr/share/fonts/opentype/inter"]:
-        if os.path.isdir(pattern_dir):
-            for f in sorted(os.listdir(pattern_dir)):
-                if bold and ("bold" in f.lower() or "Bold" in f):
-                    font_paths.insert(0, os.path.join(pattern_dir, f))
-                elif not bold and ("regular" in f.lower() or "Regular" in f):
-                    font_paths.insert(0, os.path.join(pattern_dir, f))
 
     for path in font_paths:
         if os.path.exists(path):
@@ -62,6 +50,7 @@ def _find_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
             except Exception:
                 continue
 
+    logger.warning("No TrueType font found, using default")
     return ImageFont.load_default()
 
 
