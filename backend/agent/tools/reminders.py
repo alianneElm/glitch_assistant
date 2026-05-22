@@ -178,6 +178,33 @@ def _delete_reminder_from_scheduler(reminder_text: str) -> str:
     return f"No encontré un recordatorio con '{reminder_text}'."
 
 
+def send_whatsapp(to_phone: str, message: str) -> str:
+    """Send a WhatsApp message immediately to a contact.
+
+    Args:
+        to_phone: Recipient phone number (e.g. '+46701234567')
+        message: Message text to send
+    """
+    to_phone = to_phone.strip()
+    if not to_phone.startswith("whatsapp:"):
+        if not to_phone.startswith("+"):
+            to_phone = "+" + to_phone
+        to_phone = f"whatsapp:{to_phone}"
+
+    try:
+        _twilio_client.messages.create(
+            from_=settings.twilio_whatsapp_number,
+            to=to_phone,
+            body=message,
+        )
+        short_phone = to_phone.replace("whatsapp:", "")
+        logger.info("WhatsApp sent to %s: %s", short_phone, message[:80])
+        return f"✅ Mensaje enviado a {short_phone}"
+    except Exception as e:
+        logger.exception("Failed to send WhatsApp to %s", to_phone)
+        return f"❌ Error al enviar: {e}"
+
+
 def send_scheduled_message(to_phone: str, message: str, send_at: str) -> str:
     """Schedule a WhatsApp message to another contact at a specific time.
 

@@ -8,7 +8,7 @@ from backend.agent.prompts import get_system_prompt
 from backend.agent.tools.calendar import create_event, get_todays_events, get_upcoming_events
 from backend.agent.tools.calls import make_phone_call
 from backend.agent.tools.contacts import delete_contact, get_contact, list_contacts, save_contact
-from backend.agent.tools.reminders import create_reminder, delete_reminder, list_reminders, send_scheduled_message
+from backend.agent.tools.reminders import create_reminder, delete_reminder, list_reminders, send_scheduled_message, send_whatsapp
 from backend.config import settings
 from backend.models.conversation import Message
 from backend.services.database import get_session
@@ -232,16 +232,30 @@ def _build_tools() -> list[dict]:
             },
         },
         {
-            "name": "send_scheduled_message",
-            "description": f"Send a WhatsApp message to another contact at a scheduled time. Right now it is {now} ({tz}). The recipient must have joined the Twilio sandbox to receive the message.",
+            "name": "send_whatsapp",
+            "description": f"Send a WhatsApp message immediately to a contact. If the user says a contact name (e.g. 'mándale un mensaje a María'), pass the contact_name and the phone will be looked up automatically. Recipient must have joined the Twilio sandbox.",
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "to_phone": {"type": "string", "description": "Recipient phone number with country code, e.g. '+46701234567'"},
+                    "contact_name": {"type": "string", "description": "Name of the recipient (looked up from saved contacts)", "default": ""},
+                    "to_phone": {"type": "string", "description": "Phone number with country code. Can be empty if contact_name is provided.", "default": ""},
+                    "message": {"type": "string", "description": "The message text to send"},
+                },
+                "required": ["message"],
+            },
+        },
+        {
+            "name": "send_scheduled_message",
+            "description": f"Schedule a WhatsApp message to a contact for a future time. Right now it is {now} ({tz}). If the user says a contact name, pass contact_name and the phone will be looked up. Recipient must have joined the Twilio sandbox.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "contact_name": {"type": "string", "description": "Name of the recipient (looked up from saved contacts)", "default": ""},
+                    "to_phone": {"type": "string", "description": "Phone number with country code. Can be empty if contact_name is provided.", "default": ""},
                     "message": {"type": "string", "description": "The message text to send"},
                     "send_at": {"type": "string", "description": "When to send, ISO format (e.g. '2026-05-23T09:00:00')"},
                 },
-                "required": ["to_phone", "message", "send_at"],
+                "required": ["message", "send_at"],
             },
         },
         {
@@ -294,29 +308,53 @@ def _build_tools() -> list[dict]:
     ]
 
 
-def _smart_phone_call(**kwargs) -> str:
-    """Make a phone call, auto-filling contact details from saved contacts."""
-    phone_number = kwargs.get("phone_number", "")
-    contact_name = kwargs.get("contact_name", "")
+def _resolve_contact(contact_name: str, to_phone: str) -> tuple[str, str]:
+    """Resolve phone number from contact name or return as-is.
 
-    # If no phone number but we have a name, look up the contact
-    if not phone_number and contact_name:
+    Returns (phone, resolved_name) or raises ValueError if not found.
+    """
+    if to_phone:
+        return to_phone, contact_name
+    if contact_name:
         contact = get_contact(contact_name)
         if contact:
-            kwargs["phone_number"] = contact["phone"]
-            kwargs.setdefault("language", contact["language"])
-            if not kwargs.get("contact_name"):
-                kwargs["contact_name"] = contact["name"]
-            return make_phone_call(**kwargs)
-        else:
-            return f"No encontré un contacto con el nombre '{contact_name}'. Guárdalo primero con save_contact."
+            return contact["phone"], contact["name"]
+        raise ValueError(f"No encontré un contacto con el nombre '{contact_name}'. Guárdalo primero con save_contact.")
+    raise ValueError("Necesito un nombre de contacto o número de teléfono.")
 
-    # If we have a phone number but no contact_name, try to find the contact
-    if phone_number and not contact_name:
-        # Try reverse lookup by iterating (simple approach)
-        pass
 
+def _smart_phone_call(**kwargs) -> str:
+    """Make a phone call, auto-filling contact details from saved contacts."""
+    try:
+        phone, name = _resolve_contact(kwargs.get("contact_name", ""), kwargs.get("phone_number", ""))
+        kwargs["phone_number"] = phone
+        kwargs["contact_name"] = name
+        # Also fill language from contact if not explicitly set
+        if not kwargs.get("language") or kwargs.get("language") == "sv":
+            contact = get_contact(name)
+            if contact:
+                kwargs["language"] = contact["language"]
+    except ValueError as e:
+        return str(e)
     return make_phone_call(**kwargs)
+
+
+def _smart_send_whatsapp(**kwargs) -> str:
+    """Send WhatsApp, resolving contact name to phone number."""
+    try:
+        phone, _ = _resolve_contact(kwargs.get("contact_name", ""), kwargs.get("to_phone", ""))
+    except ValueError as e:
+        return str(e)
+    return send_whatsapp(to_phone=phone, message=kwargs["message"])
+
+
+def _smart_send_scheduled(**kwargs) -> str:
+    """Schedule WhatsApp message, resolving contact name to phone number."""
+    try:
+        phone, _ = _resolve_contact(kwargs.get("contact_name", ""), kwargs.get("to_phone", ""))
+    except ValueError as e:
+        return str(e)
+    return send_scheduled_message(to_phone=phone, message=kwargs["message"], send_at=kwargs["send_at"])
 
 
 TOOL_FUNCTIONS = {
@@ -326,7 +364,8 @@ TOOL_FUNCTIONS = {
     "create_reminder": lambda **kwargs: create_reminder(**kwargs),
     "list_reminders": lambda **kwargs: list_reminders(),
     "delete_reminder": lambda **kwargs: delete_reminder(**kwargs),
-    "send_scheduled_message": lambda **kwargs: send_scheduled_message(**kwargs),
+    "send_whatsapp": lambda **kwargs: _smart_send_whatsapp(**kwargs),
+    "send_scheduled_message": lambda **kwargs: _smart_send_scheduled(**kwargs),
     "make_phone_call": lambda **kwargs: _smart_phone_call(**kwargs),
     "save_contact": lambda **kwargs: save_contact(**kwargs),
     "list_contacts": lambda **kwargs: list_contacts(),
