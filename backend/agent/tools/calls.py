@@ -67,16 +67,25 @@ def make_phone_call(
         else:
             first_message = "Hi! I'm Glitch, Alianne's personal assistant. Do you have a moment?"
 
+    # Map language to Deepgram transcriber language codes
+    transcriber_languages = {"sv": "sv", "es": "es", "en": "en"}
+    transcriber_lang = transcriber_languages.get(language, "sv")
+
     # Create the call via Vapi API
     payload = {
         "assistantId": settings.vapi_assistant_id,
         "assistantOverrides": {
             "firstMessage": first_message,
+            "transcriber": {
+                "provider": "deepgram",
+                "model": "nova-3",
+                "language": transcriber_lang,
+            },
             "model": {
                 "provider": "anthropic",
                 "model": "claude-sonnet-4-20250514",
-                "temperature": 0.5,
-                "maxTokens": 250,
+                "temperature": 0.7,
+                "maxTokens": 500,
                 "messages": [
                     {
                         "role": "system",
