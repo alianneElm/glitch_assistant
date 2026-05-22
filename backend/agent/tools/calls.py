@@ -49,13 +49,12 @@ def make_phone_call(
 
 ## Rules
 - Speak in {lang_name} primarily. Switch language if the other person prefers a different one.
-- Be polite, friendly, and professional.
-- Introduce yourself as Alianne's personal assistant.
-- Stay focused on the objective. Don't go off-topic.
-- If you accomplish the objective, confirm the details clearly before ending the call.
-- If the person is unavailable or can't help, politely thank them and end the call.
-- Keep responses short and natural — this is a phone conversation, not an essay.
-- When you have all the information needed, summarize what was agreed and say goodbye.
+- Be friendly and warm but GET TO THE POINT quickly.
+- NEVER ask "do you have a moment?" or "is this a good time?" — go straight to the reason for calling.
+- Your first message already introduces you, so just continue with the objective.
+- Keep every response to 1-2 short sentences. This is a phone call, be natural and concise.
+- If you accomplish the objective, confirm the details briefly and say goodbye.
+- If the person is unavailable or can't help, thank them and end the call quickly.
 
 ## IMPORTANT: After confirming an appointment or event
 - Once a date/time is confirmed, IMMEDIATELY use the create_event tool to save it to Alianne's calendar.
@@ -65,12 +64,14 @@ def make_phone_call(
 
     # Default first message if not provided
     if not first_message:
+        # Build a short greeting that goes straight to the point
+        objective_short = objective.split(".")[0]  # First sentence of objective
         if language == "sv":
-            first_message = "Hej! Jag är Glitch, Aliannes personliga assistent. Har du en stund?"
+            first_message = f"Hej! Jag är Glitch, Aliannes assistent. Jag ringer angående {objective_short}."
         elif language == "es":
-            first_message = "¡Hola! Soy Glitch, el asistente personal de Alianne. ¿Tienes un momento?"
+            first_message = f"¡Hola! Soy Glitch, el asistente de Alianne. Te llamo por {objective_short}."
         else:
-            first_message = "Hi! I'm Glitch, Alianne's personal assistant. Do you have a moment?"
+            first_message = f"Hi! I'm Glitch, Alianne's assistant. I'm calling about {objective_short}."
 
     # Map language to Deepgram transcriber language codes
     transcriber_languages = {"sv": "sv", "es": "es", "en": "en"}
