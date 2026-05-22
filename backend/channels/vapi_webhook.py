@@ -158,16 +158,6 @@ async def vapi_action(request: Request):
         contact_name = call_meta.get("contact_name", "")
         logger.info("Call metadata: call_id=%s, contact_name=%s", call_id, contact_name)
 
-        # Send call summary to user via WhatsApp
-        if summary:
-            try:
-                _send_whatsapp(
-                    settings.my_whatsapp_number,
-                    f"📞 Resumen de llamada:\n{summary}",
-                )
-            except Exception:
-                logger.exception("Failed to send call summary via WhatsApp")
-
         # Try to extract and create calendar event from call results
         if summary or transcript:
             try:
@@ -252,7 +242,21 @@ If the call FAILED or NO appointment was agreed:
         )
         logger.info("Auto-created calendar event: %s", result)
 
+        # Format a clean notification
+        from datetime import datetime as _dt
+        try:
+            evt_dt = _dt.fromisoformat(data["start_time"])
+            evt_time = evt_dt.strftime("%A %d/%m a las %H:%M")
+        except Exception:
+            evt_time = data["start_time"]
+
         _send_whatsapp(
             settings.my_whatsapp_number,
-            f"📅 Evento creado automáticamente: {data['summary']} — {data['start_time']}",
+            f"📅 {data['summary']} — {evt_time}",
+        )
+    else:
+        # No event agreed — short notification
+        _send_whatsapp(
+            settings.my_whatsapp_number,
+            f"📞 Llamada finalizada. No se agendó nada.",
         )
