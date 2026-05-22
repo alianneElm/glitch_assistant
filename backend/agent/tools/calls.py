@@ -58,14 +58,14 @@ def make_phone_call(
         day_reference.append(f"  {day_names_en[date.weekday()]} ({day_names_sv[date.weekday()]}) = {date.strftime('%Y-%m-%d')}")
     day_reference_str = "\n".join(day_reference)
 
-    # Load existing events so the agent knows what times are busy
-    from backend.agent.tools.calendar import get_upcoming_events
+    # Load busy times in a simple format the voice model can understand
+    from backend.agent.tools.calendar import get_busy_times
     try:
-        existing_events = get_upcoming_events(days=14)
-        logger.info("Calendar events loaded for call prompt: %s", existing_events[:200])
+        busy_times = get_busy_times(days=14)
+        logger.info("Busy times loaded for call: %s", busy_times.replace("\n", " | ")[:300])
     except Exception as e:
-        logger.exception("Failed to load calendar events for call")
-        existing_events = "Could not load calendar — proceed with caution."
+        logger.exception("Failed to load calendar for call")
+        busy_times = "WARNING: Could not load calendar."
 
     system_prompt = f"""You are Glitch, Alianne's personal AI assistant, making a phone call on her behalf.
 {contact_info}
@@ -76,8 +76,9 @@ Today is {now.strftime('%A %Y-%m-%d %H:%M')} ({settings.user_timezone})
 ## Day reference (USE THIS for correct dates!)
 {day_reference_str}
 
-## Alianne's existing calendar (BUSY times — do NOT schedule here!)
-{existing_events}
+## ⛔ ALIANNE'S BUSY TIMES — SHE CANNOT MEET AT THESE TIMES:
+{busy_times}
+⛔ If someone proposes ANY of the times above, you MUST say "Alianne is busy then" and suggest a different time.
 
 ## Your objective for this call
 {objective}

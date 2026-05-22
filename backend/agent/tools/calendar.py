@@ -129,6 +129,58 @@ def get_upcoming_events(days: int = 7) -> str:
     return f"Próximos {days} días:" + "".join(lines)
 
 
+def get_busy_times(days: int = 14) -> str:
+    """Get busy time slots in a simple format for the voice agent.
+
+    Returns a flat list like:
+      BUSY: Saturday 24 May, 14:00-15:00
+      BUSY: Sunday 25 May, 10:00-11:00
+    """
+    service = _get_calendar_service()
+    if not service:
+        return "WARNING: Could not load calendar."
+
+    now = datetime.now().astimezone()
+    end = now + timedelta(days=days)
+
+    events_result = service.events().list(
+        calendarId="primary",
+        timeMin=now.isoformat(),
+        timeMax=end.isoformat(),
+        singleEvents=True,
+        orderBy="startTime",
+        maxResults=30,
+    ).execute()
+
+    events = events_result.get("items", [])
+    if not events:
+        return "Alianne has NO events scheduled. All times are free."
+
+    day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    lines = []
+    for event in events:
+        start_raw = event["start"].get("dateTime", event["start"].get("date"))
+        end_raw = event["end"].get("dateTime", event["end"].get("date", ""))
+
+        if "T" in start_raw:
+            start_dt = datetime.fromisoformat(start_raw)
+            if end_raw and "T" in end_raw:
+                end_dt = datetime.fromisoformat(end_raw)
+            else:
+                end_dt = start_dt + timedelta(hours=1)
+            day_name = day_names[start_dt.weekday()]
+            lines.append(
+                f"BUSY: {day_name} {start_dt.strftime('%d %B')}, "
+                f"{start_dt.strftime('%H:%M')}-{end_dt.strftime('%H:%M')}"
+            )
+        else:
+            dt = datetime.fromisoformat(start_raw)
+            day_name = day_names[dt.weekday()]
+            lines.append(f"BUSY: {day_name} {dt.strftime('%d %B')}, ALL DAY")
+
+    return "\n".join(lines)
+
+
 def create_event(summary: str, start_time: str, duration_minutes: int = 60, description: str = "") -> str:
     """Create a calendar event.
 
