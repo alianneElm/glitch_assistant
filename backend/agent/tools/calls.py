@@ -10,6 +10,9 @@ logger = logging.getLogger(__name__)
 
 VAPI_BASE_URL = "https://api.vapi.ai"
 
+# Store call metadata so the webhook can use contact_name later
+active_calls: dict[str, dict] = {}
+
 
 def make_phone_call(
     phone_number: str,
@@ -57,7 +60,12 @@ def make_phone_call(
 
     # Load existing events so the agent knows what times are busy
     from backend.agent.tools.calendar import get_upcoming_events
-    existing_events = get_upcoming_events(days=14)
+    try:
+        existing_events = get_upcoming_events(days=14)
+        logger.info("Calendar events loaded for call prompt: %s", existing_events[:200])
+    except Exception as e:
+        logger.exception("Failed to load calendar events for call")
+        existing_events = "Could not load calendar — proceed with caution."
 
     system_prompt = f"""You are Glitch, Alianne's personal AI assistant, making a phone call on her behalf.
 {contact_info}
@@ -151,7 +159,13 @@ Today is {now.strftime('%A %Y-%m-%d %H:%M')} ({settings.user_timezone})
             if response.status_code == 201:
                 data = response.json()
                 call_id = data.get("id", "unknown")
-                logger.info("Call initiated: %s to %s (objective: %s)", call_id, phone_number, objective[:50])
+                # Save metadata for the webhook to use when the call ends
+                active_calls[call_id] = {
+                    "contact_name": contact_name,
+                    "objective": objective,
+                    "phone_number": phone_number,
+                }
+                logger.info("Call initiated: %s to %s (contact: %s, objective: %s)", call_id, phone_number, contact_name, objective[:50])
                 return f"✅ Llamada iniciada a {phone_number}. ID: {call_id}. Te avisaré cuando termine."
             else:
                 error_msg = response.text

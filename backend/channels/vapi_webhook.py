@@ -151,6 +151,13 @@ async def vapi_action(request: Request):
         transcript = message.get("transcript", "")
         logger.info("Vapi call ended. Duration: %ss. Summary: %s", duration, summary[:200])
 
+        # Get contact name from call metadata
+        from backend.agent.tools.calls import active_calls
+        call_id = message.get("call", {}).get("id", "") or body.get("call", {}).get("id", "")
+        call_meta = active_calls.pop(call_id, {})
+        contact_name = call_meta.get("contact_name", "")
+        logger.info("Call metadata: call_id=%s, contact_name=%s", call_id, contact_name)
+
         # Send call summary to user via WhatsApp
         if summary:
             try:
@@ -164,18 +171,17 @@ async def vapi_action(request: Request):
         # Try to extract and create calendar event from call results
         if summary or transcript:
             try:
-                _extract_and_create_event(summary, transcript)
+                _extract_and_create_event(summary, transcript, contact_name)
             except Exception:
                 logger.exception("Failed to extract event from call summary")
 
     return {"ok": True}
 
 
-def _extract_and_create_event(summary: str, transcript: str) -> None:
-    """Use Claude to extract event details from call summary and create calendar event.
+def _extract_and_create_event(summary: str, transcript: str, contact_name: str = "") -> None:
+    """Extract event details from call summary and create calendar event.
 
-    This is a FALLBACK — the voice agent should create events during the call.
-    We check for existing events first to avoid duplicates.
+    Checks existing events to avoid duplicates and conflicts.
     """
     from datetime import datetime, timedelta
 
@@ -193,6 +199,8 @@ def _extract_and_create_event(summary: str, transcript: str) -> None:
     # Check existing events to avoid duplicates
     existing_events = get_upcoming_events(days=14)
 
+    contact_hint = f'The person called is named "{contact_name}". Use this exact name in the event title.' if contact_name else ""
+
     prompt = f"""Analyze this phone call summary and transcript. If an appointment, meeting, or event was agreed upon, extract the details.
 
 Current date/time: {now.strftime('%A %Y-%m-%d %H:%M')} ({tz})
@@ -206,23 +214,19 @@ Current date/time: {now.strftime('%A %Y-%m-%d %H:%M')} ({tz})
 ## Transcript (last part)
 {transcript[-1000:] if transcript else "N/A"}
 
-## Existing calendar events (to avoid duplicates)
+## Existing calendar events (check for conflicts!)
 {existing_events}
 
-IMPORTANT RULES:
+RULES:
 - This calendar belongs to Alianne. Event titles must be from HER perspective.
-- Use the OTHER person's name, NOT Alianne's. Example: "Fika with Erik", NOT "Fika with Alianne".
-- Use the day reference above to convert day names to correct dates.
-- "Sunday" = söndag, "Saturday" = lördag, etc. Map carefully!
-- If there is ALREADY an event at the same date/time with similar topic, respond with {{"event": false}} to avoid duplicates.
+{contact_hint}
+- NEVER use Alianne's name in the title. Use the other person's name: "Fika with Maria", NOT "Fika with Alianne".
+- Use the day reference above to convert day names to dates. Sunday=söndag, Saturday=lördag.
+- If an event ALREADY EXISTS at the same date/time, respond {{"event": false}}.
 
-Respond with ONLY a JSON object, no other text. No explanation, no reasoning, just JSON.
-
-If an event was confirmed AND doesn't already exist:
-{{"event": true, "summary": "Event title", "start_time": "YYYY-MM-DDTHH:MM:SS", "duration_minutes": 60, "description": "Brief description"}}
-
-Otherwise:
-{{"event": false}}"""
+Respond with ONLY JSON, nothing else:
+{{"event": true, "summary": "Fika with [name]", "start_time": "YYYY-MM-DDTHH:MM:SS", "duration_minutes": 60, "description": "Brief note"}}
+or {{"event": false}}"""
 
     response = _anthropic.messages.create(
         model="claude-sonnet-4-20250514",
