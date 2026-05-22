@@ -138,15 +138,33 @@ async def vapi_action(request: Request):
 
 
 def _extract_and_create_event(summary: str, transcript: str) -> None:
-    """Use Claude to extract event details from call summary and create calendar event."""
-    from datetime import datetime
+    """Use Claude to extract event details from call summary and create calendar event.
 
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    This is a FALLBACK — the voice agent should create events during the call.
+    We check for existing events first to avoid duplicates.
+    """
+    from datetime import datetime, timedelta
+
+    now = datetime.now()
     tz = settings.user_timezone
+
+    # Build day-of-week reference
+    day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    day_reference = []
+    for d in range(7):
+        date = now + timedelta(days=d)
+        day_reference.append(f"  {day_names[date.weekday()]} = {date.strftime('%Y-%m-%d')}")
+    day_ref_str = "\n".join(day_reference)
+
+    # Check existing events to avoid duplicates
+    existing_events = get_upcoming_events(days=14)
 
     prompt = f"""Analyze this phone call summary and transcript. If an appointment, meeting, or event was agreed upon, extract the details.
 
-Current date/time: {now} ({tz})
+Current date/time: {now.strftime('%A %Y-%m-%d %H:%M')} ({tz})
+
+## Day reference (USE THIS for correct dates!)
+{day_ref_str}
 
 ## Call Summary
 {summary}
@@ -154,15 +172,20 @@ Current date/time: {now} ({tz})
 ## Transcript (last part)
 {transcript[-1000:] if transcript else "N/A"}
 
-IMPORTANT: This calendar belongs to Alianne. The event title must be from HER perspective.
-- Use the OTHER person's name in the title, NOT Alianne's name.
-- Example: "Fika with Erik", "Lunch with Sara", "Meeting with Dr. Johansson"
-- If the person's name is unclear from the transcript, use a descriptive title like "Fika" or "Dentist appointment".
+## Existing calendar events (to avoid duplicates)
+{existing_events}
 
-If an event was confirmed, respond with EXACTLY this JSON format (nothing else):
+IMPORTANT RULES:
+- This calendar belongs to Alianne. Event titles must be from HER perspective.
+- Use the OTHER person's name, NOT Alianne's. Example: "Fika with Erik", NOT "Fika with Alianne".
+- Use the day reference above to convert day names to correct dates.
+- "Sunday" = söndag, "Saturday" = lördag, etc. Map carefully!
+- If there is ALREADY an event at the same date/time with similar topic, respond with {{"event": false}} to avoid duplicates.
+
+If an event was confirmed AND doesn't already exist, respond with EXACTLY this JSON:
 {{"event": true, "summary": "Event title", "start_time": "YYYY-MM-DDTHH:MM:SS", "duration_minutes": 60, "description": "Brief description"}}
 
-If NO event was confirmed (call failed, person unavailable, etc.), respond with:
+If NO event was confirmed OR it already exists in the calendar, respond with:
 {{"event": false}}"""
 
     response = _anthropic.messages.create(
@@ -177,7 +200,6 @@ If NO event was confirmed (call failed, person unavailable, etc.), respond with:
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
-        # Try to find JSON in the response
         import re
         match = re.search(r'\{.*\}', text, re.DOTALL)
         if match:
@@ -195,7 +217,6 @@ If NO event was confirmed (call failed, person unavailable, etc.), respond with:
         )
         logger.info("Auto-created calendar event: %s", result)
 
-        # Notify user
         _send_whatsapp(
             settings.my_whatsapp_number,
             f"📅 Evento creado automáticamente: {data['summary']} — {data['start_time']}",

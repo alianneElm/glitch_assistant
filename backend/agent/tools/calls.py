@@ -38,13 +38,31 @@ def make_phone_call(
         phone_number = "+" + phone_number
 
     # Build dynamic system prompt for this specific call
+    from datetime import datetime, timedelta
+
     language_names = {"sv": "Swedish", "es": "Spanish", "en": "English"}
     lang_name = language_names.get(language, "Swedish")
 
     contact_info = f"You are calling {contact_name}." if contact_name else ""
 
+    # Build day-of-week reference so the model gets dates right
+    now = datetime.now()
+    day_names_sv = ["måndag", "tisdag", "onsdag", "torsdag", "fredag", "lördag", "söndag"]
+    day_names_en = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    day_reference = []
+    for d in range(7):
+        date = now + timedelta(days=d)
+        day_reference.append(f"  {day_names_en[date.weekday()]} ({day_names_sv[date.weekday()]}) = {date.strftime('%Y-%m-%d')}")
+    day_reference_str = "\n".join(day_reference)
+
     system_prompt = f"""You are Glitch, Alianne's personal AI assistant, making a phone call on her behalf.
 {contact_info}
+
+## Current date/time
+Today is {now.strftime('%A %Y-%m-%d %H:%M')} ({settings.user_timezone})
+
+## Day reference (USE THIS for correct dates!)
+{day_reference_str}
 
 ## Your objective for this call
 {objective}
