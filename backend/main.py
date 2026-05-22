@@ -90,6 +90,17 @@ async def health():
     return {"status": "ok"}
 
 
+@app.post("/test/daily-summary")
+async def test_daily_summary():
+    """Test endpoint to trigger daily summary manually."""
+    from backend.agent.tools.daily_summary import send_daily_summary
+    try:
+        send_daily_summary()
+        return {"status": "sent"}
+    except Exception as e:
+        return {"status": "error", "detail": str(e)}
+
+
 if __name__ == "__main__":
     import uvicorn
 
