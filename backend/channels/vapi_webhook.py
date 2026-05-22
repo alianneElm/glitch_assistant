@@ -196,12 +196,9 @@ def _extract_and_create_event(summary: str, transcript: str, contact_name: str =
         day_reference.append(f"  {day_names[date.weekday()]} = {date.strftime('%Y-%m-%d')}")
     day_ref_str = "\n".join(day_reference)
 
-    # Check existing events to avoid duplicates
-    existing_events = get_upcoming_events(days=14)
+    contact_hint = f'The person called is named "{contact_name}". Use this EXACT name in the event title.' if contact_name else ""
 
-    contact_hint = f'The person called is named "{contact_name}". Use this exact name in the event title.' if contact_name else ""
-
-    prompt = f"""Analyze this phone call summary and transcript. If an appointment, meeting, or event was agreed upon, extract the details.
+    prompt = f"""A phone call just ended. Extract the agreed appointment and return it as JSON.
 
 Current date/time: {now.strftime('%A %Y-%m-%d %H:%M')} ({tz})
 
@@ -214,19 +211,17 @@ Current date/time: {now.strftime('%A %Y-%m-%d %H:%M')} ({tz})
 ## Transcript (last part)
 {transcript[-1000:] if transcript else "N/A"}
 
-## Existing calendar events (check for conflicts!)
-{existing_events}
-
 RULES:
-- This calendar belongs to Alianne. Event titles must be from HER perspective.
 {contact_hint}
-- NEVER use Alianne's name in the title. Use the other person's name: "Fika with Maria", NOT "Fika with Alianne".
-- Use the day reference above to convert day names to dates. Sunday=söndag, Saturday=lördag.
-- If an event ALREADY EXISTS at the same date/time, respond {{"event": false}}.
+- Event title must be from Alianne's perspective: "Fika with Maria", NOT "Fika with Alianne".
+- Use the day reference above to get the correct date. Sunday=söndag, Saturday=lördag.
+- If the call summary says an appointment was agreed, ALWAYS create it. Do NOT skip.
 
 Respond with ONLY JSON, nothing else:
 {{"event": true, "summary": "Fika with [name]", "start_time": "YYYY-MM-DDTHH:MM:SS", "duration_minutes": 60, "description": "Brief note"}}
-or {{"event": false}}"""
+
+If the call FAILED or NO appointment was agreed:
+{{"event": false}}"""
 
     response = _anthropic.messages.create(
         model="claude-sonnet-4-20250514",
