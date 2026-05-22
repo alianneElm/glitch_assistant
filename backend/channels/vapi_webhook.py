@@ -77,7 +77,7 @@ async def vapi_action(request: Request):
     message = body.get("message", {})
     msg_type = message.get("type", "")
 
-    # Handle function-call type
+    # Handle function-call type (legacy format)
     if msg_type == "function-call":
         function_call = message.get("functionCall", {})
         func_name = function_call.get("name", "")
@@ -105,6 +105,40 @@ async def vapi_action(request: Request):
                 }
             ]
         }
+
+    # Handle tool-calls type (new Vapi format with Anthropic models)
+    if msg_type == "tool-calls":
+        tool_calls = message.get("toolCallList", []) or message.get("toolCalls", [])
+        results = []
+
+        for tc in tool_calls:
+            func_info = tc.get("function", {})
+            func_name = func_info.get("name", "")
+            func_params = func_info.get("arguments", {})
+            tool_call_id = tc.get("id", "")
+
+            # Skip empty argument calls (Haiku sometimes sends empty first)
+            if not func_params and func_name:
+                logger.warning("Skipping tool call %s with empty arguments", func_name)
+                results.append({"toolCallId": tool_call_id, "result": "Error: no arguments provided"})
+                continue
+
+            logger.info("Vapi tool call: %s(%s)", func_name, json.dumps(func_params, ensure_ascii=False))
+
+            handler = VAPI_FUNCTIONS.get(func_name)
+            if handler:
+                try:
+                    result = handler(func_params)
+                except Exception as e:
+                    logger.exception("Vapi function %s failed", func_name)
+                    result = f"Error: {e}"
+            else:
+                result = f"Función '{func_name}' no encontrada"
+
+            logger.info("Vapi tool call result: %s", str(result)[:200])
+            results.append({"toolCallId": tool_call_id, "result": result})
+
+        return {"results": results}
 
     # Handle other message types (status updates, etc.)
     if msg_type == "status-update":
@@ -182,10 +216,12 @@ IMPORTANT RULES:
 - "Sunday" = söndag, "Saturday" = lördag, etc. Map carefully!
 - If there is ALREADY an event at the same date/time with similar topic, respond with {{"event": false}} to avoid duplicates.
 
-If an event was confirmed AND doesn't already exist, respond with EXACTLY this JSON:
+Respond with ONLY a JSON object, no other text. No explanation, no reasoning, just JSON.
+
+If an event was confirmed AND doesn't already exist:
 {{"event": true, "summary": "Event title", "start_time": "YYYY-MM-DDTHH:MM:SS", "duration_minutes": 60, "description": "Brief description"}}
 
-If NO event was confirmed OR it already exists in the calendar, respond with:
+Otherwise:
 {{"event": false}}"""
 
     response = _anthropic.messages.create(
