@@ -2,7 +2,7 @@ import json
 import logging
 from datetime import datetime
 
-from anthropic import Anthropic
+from anthropic import Anthropic, BadRequestError
 
 from backend.agent.prompts import get_system_prompt
 from backend.agent.tools.calendar import create_event, get_todays_events, get_upcoming_events
@@ -40,44 +40,100 @@ def _load_history(user_id: str) -> list[dict]:
 def _clean_history(messages: list[dict]) -> list[dict]:
     """Remove orphaned tool_result / tool_use messages that would cause API errors.
 
-    When we load only the last N messages, we may cut off a tool_use assistant
-    message while keeping its tool_result follow-up, or end with a tool_use that
-    has no tool_result after it.  The Anthropic API rejects both cases.
+    The Anthropic API requires that every tool_result block references a tool_use
+    block in the immediately preceding assistant message.  When we load only the
+    last N messages we can break that pairing.  This function walks the list and
+    keeps only structurally valid message pairs.
     """
     if not messages:
         return []
 
-    # 1. Skip leading messages that contain tool_result blocks (orphaned)
-    start = 0
-    for i, msg in enumerate(messages):
+    cleaned: list[dict] = []
+    i = 0
+    while i < len(messages):
+        msg = messages[i]
         content = msg.get("content")
-        if isinstance(content, list) and any(
-            isinstance(item, dict) and item.get("type") == "tool_result"
-            for item in content
-        ):
-            start = i + 1
+
+        # Check if this message contains tool_result blocks
+        has_tool_result = (
+            isinstance(content, list)
+            and any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content)
+        )
+
+        # Check if this message contains tool_use blocks
+        has_tool_use = (
+            isinstance(content, list)
+            and any(isinstance(b, dict) and b.get("type") == "tool_use" for b in content)
+        )
+
+        if has_tool_result:
+            # This is a tool_result message — only keep it if the previous
+            # message in `cleaned` is an assistant message with matching tool_use ids
+            if cleaned:
+                prev = cleaned[-1]
+                prev_content = prev.get("content")
+                prev_tool_ids = set()
+                if isinstance(prev_content, list):
+                    for b in prev_content:
+                        if isinstance(b, dict) and b.get("type") == "tool_use":
+                            prev_tool_ids.add(b.get("id", ""))
+
+                result_ids = {
+                    b.get("tool_use_id", "")
+                    for b in content
+                    if isinstance(b, dict) and b.get("type") == "tool_result"
+                }
+
+                if prev.get("role") == "assistant" and result_ids <= prev_tool_ids:
+                    # Valid pair — keep it
+                    cleaned.append(msg)
+                else:
+                    # Orphaned tool_result — skip it
+                    logger.warning("Skipping orphaned tool_result message (ids: %s)", result_ids)
+            else:
+                # No previous message at all — skip
+                logger.warning("Skipping leading tool_result message")
+        elif has_tool_use:
+            # Assistant message with tool_use — only keep if next message
+            # is a matching tool_result (peek ahead)
+            next_i = i + 1
+            if next_i < len(messages):
+                next_msg = messages[next_i]
+                next_content = next_msg.get("content")
+                next_has_result = (
+                    isinstance(next_content, list)
+                    and any(isinstance(b, dict) and b.get("type") == "tool_result" for b in next_content)
+                )
+                if next_has_result:
+                    # Valid pair — keep this tool_use message
+                    cleaned.append(msg)
+                else:
+                    # tool_use without following tool_result — skip
+                    logger.warning("Skipping tool_use message without following tool_result")
+            else:
+                # Last message is a tool_use with no result — skip
+                logger.warning("Skipping trailing tool_use message")
         else:
-            break
+            # Regular text message — always keep
+            cleaned.append(msg)
 
-    result = messages[start:]
+        i += 1
 
-    # 2. Trim trailing assistant messages that contain tool_use (no result follows)
-    while result:
-        last = result[-1]
-        content = last.get("content")
-        if isinstance(content, list) and any(
-            (isinstance(item, dict) and item.get("type") == "tool_use")
-            for item in content
-        ):
-            result.pop()
+    # Ensure the conversation starts with a user message (API requirement)
+    while cleaned and cleaned[0].get("role") != "user":
+        cleaned.pop(0)
+
+    # Ensure alternating user/assistant roles
+    # (remove consecutive same-role messages, keeping the latest)
+    final: list[dict] = []
+    for msg in cleaned:
+        if final and final[-1].get("role") == msg.get("role"):
+            # Same role twice — replace previous with current
+            final[-1] = msg
         else:
-            break
+            final.append(msg)
 
-    # 3. Ensure the conversation starts with a user message (API requirement)
-    while result and result[0].get("role") != "user":
-        result.pop(0)
-
-    return result
+    return final
 
 
 def _save_message(user_id: str, role: str, content) -> None:
@@ -217,6 +273,20 @@ TOOL_FUNCTIONS = {
 }
 
 
+def _clear_history(user_id: str) -> None:
+    """Delete all stored messages for a user (used when history is corrupted)."""
+    session = get_session()
+    try:
+        session.query(Message).filter(Message.user_id == user_id).delete()
+        session.commit()
+        logger.info("Cleared corrupted history for user %s", user_id)
+    except Exception:
+        session.rollback()
+        logger.exception("Failed to clear history for user %s", user_id)
+    finally:
+        session.close()
+
+
 def get_response(user_id: str, message: str) -> str:
     # Load history from database
     history = _load_history(user_id)
@@ -224,13 +294,28 @@ def get_response(user_id: str, message: str) -> str:
     history.append({"role": "user", "content": message})
     _save_message(user_id, "user", message)
 
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=500,
-        system=get_system_prompt(),
-        messages=history,
-        tools=_build_tools(),
-    )
+    try:
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=500,
+            system=get_system_prompt(),
+            messages=history,
+            tools=_build_tools(),
+        )
+    except BadRequestError as e:
+        if "tool_result" in str(e) or "tool_use" in str(e):
+            logger.warning("Corrupted history detected, clearing and retrying: %s", e)
+            _clear_history(user_id)
+            history = [{"role": "user", "content": message}]
+            response = client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=500,
+                system=get_system_prompt(),
+                messages=history,
+                tools=_build_tools(),
+            )
+        else:
+            raise
 
     # Handle tool use loop
     while response.stop_reason == "tool_use":
