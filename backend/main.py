@@ -80,6 +80,21 @@ async def serve_audio(filename: str):
     return FileResponse(filepath, media_type="audio/mpeg")
 
 
+@app.get("/media/{filename}")
+async def serve_media(filename: str):
+    """Serve temporary media files (images, etc.) for Twilio to fetch."""
+    filepath = os.path.join("/tmp", filename)
+    if not os.path.exists(filepath):
+        return {"error": "not found"}
+    media_types = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+    }
+    ext = os.path.splitext(filename)[1].lower()
+    return FileResponse(filepath, media_type=media_types.get(ext, "application/octet-stream"))
+
+
 @app.get("/")
 async def root():
     return {"status": "alive", "name": "Glitch", "version": "0.1.0"}

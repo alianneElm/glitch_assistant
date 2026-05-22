@@ -1,10 +1,9 @@
 """Daily morning summary for Glitch.
 
-Sends a WhatsApp message every morning with:
+Sends a WhatsApp image card every morning with:
 - Today's calendar events
 - Pending reminders
 - Weather (umbrella alert)
-- Traffic to work
 - Bible verse
 """
 
@@ -19,6 +18,9 @@ from backend.agent.tools.reminders import list_reminders
 from backend.config import settings
 
 logger = logging.getLogger(__name__)
+
+# Railway public domain for serving media
+RAILWAY_DOMAIN = "alluring-courtesy-production-9b65.up.railway.app"
 
 
 def _get_weather() -> str:
@@ -40,7 +42,6 @@ def _get_weather() -> str:
             resp.raise_for_status()
             data = resp.json()
 
-        # Check for rain in the next 24h
         rain_periods = []
         temp_min = 100
         temp_max = -100
@@ -56,16 +57,16 @@ def _get_weather() -> str:
         temp_str = f"{round(temp_min)}-{round(temp_max)}°C" if temp_min != temp_max else f"{round(temp_min)}°C"
 
         if rain_periods:
-            return f"🌧️ Lleva paraguas — lluvia esperada ({', '.join(rain_periods[:3])}). {temp_str}"
+            return f"Lleva paraguas — lluvia esperada ({', '.join(rain_periods[:3])}). {temp_str}"
         else:
-            return f"☀️ Sin lluvia hoy. {temp_str}"
+            return f"Sin lluvia hoy. {temp_str}"
     except Exception as e:
         logger.exception("Failed to get weather")
-        return f"🌤️ No pude consultar el clima: {e}"
+        return f"No pude consultar el clima."
 
 
-def _get_bible_verse() -> str:
-    """Get a random Bible verse in Spanish (Reina Valera)."""
+def _get_bible_verse() -> tuple[str, str]:
+    """Get a random Bible verse in Spanish (Reina Valera). Returns (ref, text)."""
     verses = [
         ("Filipenses 4:13", "Todo lo puedo en Cristo que me fortalece."),
         ("Salmos 118:24", "Este es el día que hizo Jehová; nos gozaremos y alegraremos en él."),
@@ -80,7 +81,7 @@ def _get_bible_verse() -> str:
         ("Proverbios 16:3", "Encomienda a Jehová tus obras, y tus pensamientos serán afirmados."),
         ("Isaías 40:31", "Los que esperan a Jehová tendrán nuevas fuerzas; levantarán alas como las águilas."),
         ("Salmos 37:5", "Encomienda a Jehová tu camino, y confía en él; y él hará."),
-        ("Mateo 6:34", "No os afanéis por el día de mañana, porque el día de mañana traerá su afán."),
+        ("Mateo 6:34", "No os afáneis por el día de mañana, porque el día de mañana traerá su afán."),
         ("Romanos 15:13", "Y el Dios de esperanza os llene de todo gozo y paz en el creer."),
         ("Salmos 91:1", "El que habita al abrigo del Altísimo morará bajo la sombra del Omnipotente."),
         ("2 Timoteo 1:7", "Porque no nos ha dado Dios espíritu de cobardía, sino de poder, de amor y de dominio propio."),
@@ -89,60 +90,53 @@ def _get_bible_verse() -> str:
         ("Filipenses 4:6-7", "Por nada estéis afanosos, sino sean conocidas vuestras peticiones delante de Dios en toda oración."),
         ("Hebreos 11:1", "Es, pues, la fe la certeza de lo que se espera, la convicción de lo que no se ve."),
     ]
-    ref, text = random.choice(verses)
-    return f"📖 {ref}\n\"{text}\""
-
-
-def build_daily_summary() -> str:
-    """Build the complete daily summary message."""
-    now = datetime.now()
-    day_names_es = {
-        "Monday": "Lunes", "Tuesday": "Martes", "Wednesday": "Miércoles",
-        "Thursday": "Jueves", "Friday": "Viernes", "Saturday": "Sábado", "Sunday": "Domingo",
-    }
-    day_es = day_names_es.get(now.strftime("%A"), now.strftime("%A"))
-    date_str = f"{day_es} {now.strftime('%d/%m/%Y')}"
-    is_weekend = now.weekday() >= 5
-
-    parts = [f"Buenos días ☀️ {date_str}\n"]
-
-    # Calendar
-    events = get_todays_events()
-    if "No tienes" in events or "no hay" in events.lower():
-        parts.append("📅 Sin eventos hoy — día libre")
-    else:
-        parts.append(f"📅 {events}")
-
-    # Reminders
-    reminders = list_reminders()
-    if "No tienes" not in reminders:
-        parts.append(f"⏰ {reminders}")
-
-    # Weather
-    weather = _get_weather()
-    if weather:
-        parts.append(weather)
-
-    # Bible verse
-    verse = _get_bible_verse()
-    if verse:
-        parts.append(f"\n{verse}")
-
-    return "\n\n".join(parts)
+    return random.choice(verses)
 
 
 def send_daily_summary() -> None:
-    """Build and send the daily summary via WhatsApp."""
+    """Generate summary card image and send via WhatsApp."""
     from twilio.rest import Client
 
+    from backend.agent.tools.summary_card import generate_summary_card
+
     try:
-        summary = build_daily_summary()
+        now = datetime.now()
+        day_names_es = {
+            "Monday": "Lunes", "Tuesday": "Martes", "Wednesday": "Miércoles",
+            "Thursday": "Jueves", "Friday": "Viernes", "Saturday": "Sábado", "Sunday": "Domingo",
+        }
+        month_names_es = {
+            1: "enero", 2: "febrero", 3: "marzo", 4: "abril", 5: "mayo", 6: "junio",
+            7: "julio", 8: "agosto", 9: "septiembre", 10: "octubre", 11: "noviembre", 12: "diciembre",
+        }
+        day_es = day_names_es.get(now.strftime("%A"), now.strftime("%A"))
+        date_str = f"{day_es} {now.day} de {month_names_es[now.month]}"
+
+        # Gather data
+        events = get_todays_events()
+        reminders = list_reminders()
+        weather = _get_weather()
+        verse_ref, verse_text = _get_bible_verse()
+
+        # Generate card image
+        filename = generate_summary_card(
+            date_str=date_str,
+            events_text=events,
+            reminders_text=reminders,
+            weather_text=weather,
+            verse_ref=verse_ref,
+            verse_text=verse_text,
+        )
+
+        # Send as WhatsApp image
+        image_url = f"https://{RAILWAY_DOMAIN}/media/{filename}"
         client = Client(settings.twilio_account_sid, settings.twilio_auth_token)
         client.messages.create(
             from_=settings.twilio_whatsapp_number,
             to=settings.my_whatsapp_number,
-            body=summary,
+            media_url=[image_url],
         )
-        logger.info("Daily summary sent successfully")
+        logger.info("Daily summary card sent: %s", image_url)
+
     except Exception:
-        logger.exception("Failed to send daily summary")
+        logger.exception("Failed to send daily summary card")
