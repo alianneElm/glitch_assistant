@@ -254,9 +254,28 @@ If the call FAILED or NO appointment was agreed:
             settings.my_whatsapp_number,
             f"📅 {data['summary']} — {evt_time}",
         )
+        # Log to Notion
+        try:
+            from backend.services.notion import add_log_entry
+            add_log_entry(
+                summary=f"Llamada: {data['summary']}",
+                log_type="Llamada",
+                details=f"Evento creado: {data['summary']} a las {evt_time}",
+            )
+        except Exception:
+            logger.warning("Failed to log call to Notion")
     else:
         # No event agreed — short notification
         _send_whatsapp(
             settings.my_whatsapp_number,
             f"📞 Llamada finalizada. No se agendó nada.",
         )
+        try:
+            from backend.services.notion import add_log_entry
+            add_log_entry(
+                summary=f"Llamada a {contact_name or 'desconocido'} — sin cita",
+                log_type="Llamada",
+                details=summary[:500] if summary else "Sin resumen",
+            )
+        except Exception:
+            logger.warning("Failed to log call to Notion")

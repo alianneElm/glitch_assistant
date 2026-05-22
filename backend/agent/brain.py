@@ -12,6 +12,7 @@ from backend.agent.tools.reminders import create_reminder, delete_reminder, list
 from backend.config import settings
 from backend.models.conversation import Message
 from backend.services.database import get_session
+from backend.services.notion import add_log_entry, add_shopping_item, add_todo, update_todo_status
 
 logger = logging.getLogger(__name__)
 
@@ -305,6 +306,45 @@ def _build_tools() -> list[dict]:
                 "required": ["name"],
             },
         },
+        {
+            "name": "add_todo",
+            "description": "Add a task to the to-do list in Notion. Use when the user wants to add a task, pending item, or something they need to do.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "task": {"type": "string", "description": "Task description"},
+                    "priority": {"type": "string", "description": "Priority: 'Alta', 'Media', 'Baja'", "default": "Media"},
+                    "deadline": {"type": "string", "description": "Deadline in ISO format, e.g. '2026-05-25'. Empty if no deadline.", "default": ""},
+                    "notes": {"type": "string", "description": "Optional notes", "default": ""},
+                },
+                "required": ["task"],
+            },
+        },
+        {
+            "name": "update_todo_status",
+            "description": "Mark a task as completed or change its status in Notion.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "task_name": {"type": "string", "description": "Name of the task to update (partial match)"},
+                    "status": {"type": "string", "description": "'Completado', 'En progreso', or 'Pendiente'", "default": "Completado"},
+                },
+                "required": ["task_name"],
+            },
+        },
+        {
+            "name": "add_shopping_item",
+            "description": "Add an item to the shopping list in Notion.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "item": {"type": "string", "description": "Item name, e.g. 'Leche'"},
+                    "quantity": {"type": "integer", "description": "Quantity (default 1)", "default": 1},
+                    "category": {"type": "string", "description": "'Comida', 'Hogar', 'Higiene', 'Otro'", "default": "Otro"},
+                },
+                "required": ["item"],
+            },
+        },
     ]
 
 
@@ -370,6 +410,9 @@ TOOL_FUNCTIONS = {
     "save_contact": lambda **kwargs: save_contact(**kwargs),
     "list_contacts": lambda **kwargs: list_contacts(),
     "delete_contact": lambda **kwargs: delete_contact(**kwargs),
+    "add_todo": lambda **kwargs: add_todo(**kwargs),
+    "update_todo_status": lambda **kwargs: update_todo_status(**kwargs),
+    "add_shopping_item": lambda **kwargs: add_shopping_item(**kwargs),
 }
 
 

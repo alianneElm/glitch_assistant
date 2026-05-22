@@ -213,4 +213,12 @@ def create_event(summary: str, start_time: str, duration_minutes: int = 60, desc
 
     created = service.events().insert(calendarId="primary", body=event).execute()
     time_str = start_dt.strftime("%H:%M del %d/%m")
+
+    # Sync to Notion
+    try:
+        from backend.services.notion import add_agenda_entry
+        add_agenda_entry(summary, start_time, duration_minutes, description)
+    except Exception:
+        logger.warning("Failed to sync event to Notion (non-critical)")
+
     return f"✅ Evento creado: '{summary}' a las {time_str}"

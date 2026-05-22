@@ -40,6 +40,14 @@ async def lifespan(app: FastAPI):
         except Exception:
             logger.exception("Failed to reload reminders from database")
 
+    # Initialize Notion databases
+    if settings.notion_api_key:
+        try:
+            from backend.services.notion import init_notion
+            init_notion()
+        except Exception:
+            logger.exception("Failed to initialize Notion — running without dashboard")
+
     # Schedule daily summary
     from apscheduler.triggers.cron import CronTrigger
     from backend.agent.tools.daily_summary import send_daily_summary

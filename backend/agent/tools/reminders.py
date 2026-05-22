@@ -88,6 +88,14 @@ def create_reminder(reminder_text: str, remind_at: str, user_whatsapp: str = "")
 
     time_str = remind_dt.strftime("%H:%M del %d/%m/%Y")
     logger.info("Reminder scheduled: '%s' at %s (job_id=%s)", reminder_text, time_str, job_id)
+
+    # Sync to Notion
+    try:
+        from backend.services.notion import add_reminder_entry
+        add_reminder_entry(reminder_text, remind_at)
+    except Exception:
+        logger.warning("Failed to sync reminder to Notion (non-critical)")
+
     return f"✅ Te recordaré '{reminder_text}' a las {time_str}"
 
 

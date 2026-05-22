@@ -16,3 +16,4 @@ redis==6.2.0
 sqlalchemy==2.0.41
 psycopg2-binary==2.9.9
 Pillow==11.2.1
+notion-client==2.2.1
