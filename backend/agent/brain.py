@@ -7,6 +7,7 @@ from anthropic import Anthropic, BadRequestError
 from backend.agent.prompts import get_system_prompt
 from backend.agent.tools.calendar import create_event, get_todays_events, get_upcoming_events
 from backend.agent.tools.calls import make_phone_call
+from backend.agent.tools.contacts import delete_contact, get_contact, list_contacts, save_contact
 from backend.agent.tools.reminders import create_reminder, delete_reminder, list_reminders, send_scheduled_message
 from backend.config import settings
 from backend.models.conversation import Message
@@ -245,21 +246,77 @@ def _build_tools() -> list[dict]:
         },
         {
             "name": "make_phone_call",
-            "description": f"Make an outbound phone call via AI voice agent. Use this when the user wants to call someone (a business, a friend, a contact) to coordinate, book appointments, deliver messages, etc. Right now it is {now} ({tz}). The AI agent will handle the conversation autonomously based on the objective.",
+            "description": f"Make an outbound phone call via AI voice agent. Use this when the user wants to call someone. Right now it is {now} ({tz}). If the user says a contact name without a phone number (e.g. 'llama a María'), just pass the contact_name — the phone number and language will be filled from saved contacts automatically.",
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "phone_number": {"type": "string", "description": "Phone number to call with country code, e.g. '+46701234567'"},
+                    "phone_number": {"type": "string", "description": "Phone number with country code, e.g. '+46701234567'. Can be empty if contact_name matches a saved contact.", "default": ""},
                     "objective": {"type": "string", "description": "What the call should accomplish, e.g. 'Book a dentist appointment for next Tuesday morning'"},
                     "contact_name": {"type": "string", "description": "Name of the person being called, e.g. 'Erik'. Extract from the user's message.", "default": ""},
                     "context": {"type": "string", "description": "Additional context for the AI during the call, e.g. 'Available times: Tuesday and Thursday mornings. Prefer before 11:00.'", "default": ""},
                     "first_message": {"type": "string", "description": "Custom greeting when the person picks up. Leave empty for default.", "default": ""},
                     "language": {"type": "string", "description": "Language for the call: 'sv' (Swedish), 'es' (Spanish), 'en' (English). Default 'sv' since we're in Sweden.", "default": "sv"},
                 },
-                "required": ["phone_number", "objective", "contact_name"],
+                "required": ["objective"],
+            },
+        },
+        {
+            "name": "save_contact",
+            "description": "Save a new contact or update an existing one. Use when the user wants to add someone to their contacts.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Contact name, e.g. 'María'"},
+                    "phone": {"type": "string", "description": "Phone number with country code, e.g. '+46701234567'"},
+                    "language": {"type": "string", "description": "Preferred language: 'sv' (Swedish), 'es' (Spanish), 'en' (English). Default 'sv'.", "default": "sv"},
+                    "relationship": {"type": "string", "description": "Relationship type, e.g. 'amiga', 'familia', 'dentista', 'trabajo'", "default": ""},
+                    "notes": {"type": "string", "description": "Optional notes about the contact", "default": ""},
+                },
+                "required": ["name", "phone"],
+            },
+        },
+        {
+            "name": "list_contacts",
+            "description": "List all saved contacts. Use when the user asks to see their contacts.",
+            "input_schema": {"type": "object", "properties": {}, "required": []},
+        },
+        {
+            "name": "delete_contact",
+            "description": "Delete a contact by name.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Name of the contact to delete (partial match)"},
+                },
+                "required": ["name"],
             },
         },
     ]
+
+
+def _smart_phone_call(**kwargs) -> str:
+    """Make a phone call, auto-filling contact details from saved contacts."""
+    phone_number = kwargs.get("phone_number", "")
+    contact_name = kwargs.get("contact_name", "")
+
+    # If no phone number but we have a name, look up the contact
+    if not phone_number and contact_name:
+        contact = get_contact(contact_name)
+        if contact:
+            kwargs["phone_number"] = contact["phone"]
+            kwargs.setdefault("language", contact["language"])
+            if not kwargs.get("contact_name"):
+                kwargs["contact_name"] = contact["name"]
+            return make_phone_call(**kwargs)
+        else:
+            return f"No encontré un contacto con el nombre '{contact_name}'. Guárdalo primero con save_contact."
+
+    # If we have a phone number but no contact_name, try to find the contact
+    if phone_number and not contact_name:
+        # Try reverse lookup by iterating (simple approach)
+        pass
+
+    return make_phone_call(**kwargs)
 
 
 TOOL_FUNCTIONS = {
@@ -270,7 +327,10 @@ TOOL_FUNCTIONS = {
     "list_reminders": lambda **kwargs: list_reminders(),
     "delete_reminder": lambda **kwargs: delete_reminder(**kwargs),
     "send_scheduled_message": lambda **kwargs: send_scheduled_message(**kwargs),
-    "make_phone_call": lambda **kwargs: make_phone_call(**kwargs),
+    "make_phone_call": lambda **kwargs: _smart_phone_call(**kwargs),
+    "save_contact": lambda **kwargs: save_contact(**kwargs),
+    "list_contacts": lambda **kwargs: list_contacts(),
+    "delete_contact": lambda **kwargs: delete_contact(**kwargs),
 }
 
 
