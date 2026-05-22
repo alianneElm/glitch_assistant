@@ -14,7 +14,7 @@ from datetime import datetime
 import httpx
 
 from backend.agent.tools.calendar import get_todays_events
-from backend.agent.tools.reminders import list_reminders
+from backend.agent.tools.reminders import list_todays_reminders
 from backend.config import settings
 
 logger = logging.getLogger(__name__)
@@ -114,7 +114,7 @@ def send_daily_summary() -> None:
 
         # Gather data
         events = get_todays_events()
-        reminders = list_reminders()
+        reminders = list_todays_reminders()
         weather = _get_weather()
         verse_ref, verse_text = _get_bible_verse()
 

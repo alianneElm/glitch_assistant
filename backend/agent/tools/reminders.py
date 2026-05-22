@@ -121,6 +121,38 @@ def list_reminders() -> str:
         return _list_reminders_from_scheduler()
 
 
+def list_todays_reminders() -> str:
+    """List only today's pending reminders."""
+    try:
+        from backend.models.reminder import Reminder as ReminderModel
+        from backend.services.database import get_session
+        session = get_session()
+        try:
+            now = datetime.now().astimezone()
+            end_of_day = now.replace(hour=23, minute=59, second=59)
+            reminders = (
+                session.query(ReminderModel)
+                .filter(ReminderModel.sent == False)
+                .filter(ReminderModel.remind_at > now)
+                .filter(ReminderModel.remind_at <= end_of_day)
+                .order_by(ReminderModel.remind_at)
+                .all()
+            )
+            if not reminders:
+                return ""
+
+            lines = []
+            for r in reminders:
+                time_str = r.remind_at.strftime("%H:%M")
+                lines.append(f"{time_str} — {r.reminder_text}")
+            return "\n".join(lines)
+        finally:
+            session.close()
+    except Exception:
+        logger.exception("Failed to list today's reminders from DB")
+        return ""
+
+
 def _list_reminders_from_scheduler() -> str:
     """Fallback: list reminders from APScheduler."""
     jobs = scheduler.get_jobs()
