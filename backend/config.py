@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     vapi_assistant_id: str = ""
     vapi_phone_number_id: str = ""
 
+    openweathermap_api_key: str = ""
+
     database_url: str = ""
     redis_url: str = ""
 

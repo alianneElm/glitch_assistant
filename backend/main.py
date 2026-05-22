@@ -40,6 +40,27 @@ async def lifespan(app: FastAPI):
         except Exception:
             logger.exception("Failed to reload reminders from database")
 
+    # Schedule daily summary
+    from apscheduler.triggers.cron import CronTrigger
+    from backend.agent.tools.daily_summary import send_daily_summary
+    from backend.services.scheduler import scheduler
+
+    # Weekdays (Mon-Fri) at 08:00
+    scheduler.add_job(
+        send_daily_summary,
+        trigger=CronTrigger(day_of_week="mon-fri", hour=8, minute=0, timezone=settings.user_timezone),
+        id="daily_summary_weekday",
+        replace_existing=True,
+    )
+    # Weekends (Sat-Sun) at 10:00
+    scheduler.add_job(
+        send_daily_summary,
+        trigger=CronTrigger(day_of_week="sat,sun", hour=10, minute=0, timezone=settings.user_timezone),
+        id="daily_summary_weekend",
+        replace_existing=True,
+    )
+    logger.info("Daily summary scheduled: Mon-Fri 08:00, Sat-Sun 10:00")
+
     yield
     stop_scheduler()
 
