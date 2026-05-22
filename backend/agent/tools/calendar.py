@@ -53,6 +53,50 @@ def _get_calendar_service():
     return build("calendar", "v3", credentials=creds)
 
 
+def _get_all_calendar_ids(service) -> list[str]:
+    """Get all visible calendar IDs (primary + subscribed like Outlook)."""
+    try:
+        calendar_list = service.calendarList().list().execute()
+        ids = []
+        for cal in calendar_list.get("items", []):
+            # Include all non-hidden calendars
+            if not cal.get("hidden", False):
+                ids.append(cal["id"])
+        logger.info("Found %d calendars: %s", len(ids), [c.get("summary", c["id"])[:20] for c in calendar_list.get("items", []) if not c.get("hidden", False)])
+        return ids or ["primary"]
+    except Exception:
+        logger.warning("Failed to list calendars, falling back to primary")
+        return ["primary"]
+
+
+def _query_all_calendars(service, time_min: str, time_max: str, max_results: int = 50) -> list[dict]:
+    """Query events from all calendars and merge them sorted by start time."""
+    calendar_ids = _get_all_calendar_ids(service)
+    all_events = []
+
+    for cal_id in calendar_ids:
+        try:
+            events_result = service.events().list(
+                calendarId=cal_id,
+                timeMin=time_min,
+                timeMax=time_max,
+                singleEvents=True,
+                orderBy="startTime",
+                maxResults=max_results,
+            ).execute()
+            all_events.extend(events_result.get("items", []))
+        except Exception:
+            logger.warning("Failed to query calendar %s", cal_id[:30])
+
+    # Sort by start time
+    def sort_key(e):
+        start = e["start"].get("dateTime", e["start"].get("date", ""))
+        return start
+
+    all_events.sort(key=sort_key)
+    return all_events
+
+
 def get_todays_events() -> str:
     """Get today's calendar events."""
     service = _get_calendar_service()
@@ -63,15 +107,7 @@ def get_todays_events() -> str:
     start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
     end_of_day = start_of_day + timedelta(days=1)
 
-    events_result = service.events().list(
-        calendarId="primary",
-        timeMin=start_of_day.isoformat(),
-        timeMax=end_of_day.isoformat(),
-        singleEvents=True,
-        orderBy="startTime",
-    ).execute()
-
-    events = events_result.get("items", [])
+    events = _query_all_calendars(service, start_of_day.isoformat(), end_of_day.isoformat())
     if not events:
         return "No tienes eventos para hoy."
 
@@ -97,16 +133,7 @@ def get_upcoming_events(days: int = 7) -> str:
     now = datetime.now().astimezone()
     end = now + timedelta(days=days)
 
-    events_result = service.events().list(
-        calendarId="primary",
-        timeMin=now.isoformat(),
-        timeMax=end.isoformat(),
-        singleEvents=True,
-        orderBy="startTime",
-        maxResults=20,
-    ).execute()
-
-    events = events_result.get("items", [])
+    events = _query_all_calendars(service, now.isoformat(), end.isoformat())
     if not events:
         return f"No tienes eventos en los próximos {days} días."
 
@@ -143,16 +170,7 @@ def get_busy_times(days: int = 14) -> str:
     now = datetime.now().astimezone()
     end = now + timedelta(days=days)
 
-    events_result = service.events().list(
-        calendarId="primary",
-        timeMin=now.isoformat(),
-        timeMax=end.isoformat(),
-        singleEvents=True,
-        orderBy="startTime",
-        maxResults=30,
-    ).execute()
-
-    events = events_result.get("items", [])
+    events = _query_all_calendars(service, now.isoformat(), end.isoformat(), max_results=30)
     if not events:
         return "Alianne has NO events scheduled. All times are free."
 
