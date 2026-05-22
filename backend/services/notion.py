@@ -338,6 +338,34 @@ def add_shopping_item(item: str, quantity: int = 1, category: str = "Otro") -> s
         return f"Error Notion: {e}"
 
 
+def clear_shopping_list() -> str:
+    """Archive all items in the shopping list (marks as done and removes from view)."""
+    try:
+        client = _get_client()
+        db_id = _get_db_id("compras")
+
+        # Get all non-purchased items
+        results = client.databases.query(
+            database_id=db_id,
+            filter={"property": "Comprado", "checkbox": {"equals": False}},
+        ).get("results", [])
+
+        if not results:
+            return "La lista de compras ya está vacía."
+
+        count = 0
+        for page in results:
+            # Archive the page (soft delete)
+            client.pages.update(page_id=page["id"], archived=True)
+            count += 1
+
+        logger.info("Shopping list cleared: %d items archived", count)
+        return f"Lista de compras vaciada ({count} items archivados). Lista limpia para la próxima semana."
+    except Exception as e:
+        logger.exception("Failed to clear shopping list")
+        return f"Error al vaciar la lista: {e}"
+
+
 def add_log_entry(summary: str, log_type: str = "Otro", details: str = "") -> str:
     """Add an interaction log entry to Notion."""
     try:

@@ -12,7 +12,7 @@ from backend.agent.tools.reminders import create_reminder, delete_reminder, list
 from backend.config import settings
 from backend.models.conversation import Message
 from backend.services.database import get_session
-from backend.services.notion import add_log_entry, add_shopping_item, add_todo, update_todo_status
+from backend.services.notion import add_log_entry, add_shopping_item, add_todo, clear_shopping_list, update_todo_status
 
 logger = logging.getLogger(__name__)
 
@@ -345,6 +345,11 @@ def _build_tools() -> list[dict]:
                 "required": ["item"],
             },
         },
+        {
+            "name": "clear_shopping_list",
+            "description": "Clear/empty the entire shopping list in Notion. Use when the user says they finished shopping, did the groceries, or wants to reset the list for next week.",
+            "input_schema": {"type": "object", "properties": {}, "required": []},
+        },
     ]
 
 
@@ -413,6 +418,7 @@ TOOL_FUNCTIONS = {
     "add_todo": lambda **kwargs: add_todo(**kwargs),
     "update_todo_status": lambda **kwargs: update_todo_status(**kwargs),
     "add_shopping_item": lambda **kwargs: add_shopping_item(**kwargs),
+    "clear_shopping_list": lambda **kwargs: clear_shopping_list(),
 }
 
 
