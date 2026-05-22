@@ -54,15 +54,19 @@ def _get_calendar_service():
 
 
 def _get_all_calendar_ids(service) -> list[str]:
-    """Get all visible calendar IDs (primary + subscribed like Outlook)."""
+    """Get ALL calendar IDs including subscribed/hidden ones (Outlook, etc)."""
     try:
-        calendar_list = service.calendarList().list().execute()
+        # showHidden=True and showDeleted=False to include ICS subscriptions
+        calendar_list = service.calendarList().list(showHidden=True).execute()
         ids = []
+        all_names = []
         for cal in calendar_list.get("items", []):
-            # Include all non-hidden calendars
-            if not cal.get("hidden", False):
-                ids.append(cal["id"])
-        logger.info("Found %d calendars: %s", len(ids), [c.get("summary", c["id"])[:20] for c in calendar_list.get("items", []) if not c.get("hidden", False)])
+            cal_id = cal["id"]
+            cal_name = cal.get("summary", cal_id)[:30]
+            ids.append(cal_id)
+            hidden = cal.get("hidden", False)
+            all_names.append(f"{cal_name}{'(hidden)' if hidden else ''}")
+        logger.info("Found %d calendars: %s", len(ids), all_names)
         return ids or ["primary"]
     except Exception:
         logger.warning("Failed to list calendars, falling back to primary")
