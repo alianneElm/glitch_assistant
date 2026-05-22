@@ -251,11 +251,12 @@ def _build_tools() -> list[dict]:
                 "properties": {
                     "phone_number": {"type": "string", "description": "Phone number to call with country code, e.g. '+46701234567'"},
                     "objective": {"type": "string", "description": "What the call should accomplish, e.g. 'Book a dentist appointment for next Tuesday morning'"},
+                    "contact_name": {"type": "string", "description": "Name of the person being called, e.g. 'Erik'. Extract from the user's message.", "default": ""},
                     "context": {"type": "string", "description": "Additional context for the AI during the call, e.g. 'Available times: Tuesday and Thursday mornings. Prefer before 11:00.'", "default": ""},
                     "first_message": {"type": "string", "description": "Custom greeting when the person picks up. Leave empty for default.", "default": ""},
                     "language": {"type": "string", "description": "Language for the call: 'sv' (Swedish), 'es' (Spanish), 'en' (English). Default 'sv' since we're in Sweden.", "default": "sv"},
                 },
-                "required": ["phone_number", "objective"],
+                "required": ["phone_number", "objective", "contact_name"],
             },
         },
     ]

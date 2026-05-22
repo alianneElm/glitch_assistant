@@ -14,6 +14,7 @@ VAPI_BASE_URL = "https://api.vapi.ai"
 def make_phone_call(
     phone_number: str,
     objective: str,
+    contact_name: str = "",
     context: str = "",
     first_message: str = "",
     language: str = "sv",
@@ -23,6 +24,7 @@ def make_phone_call(
     Args:
         phone_number: Number to call (e.g. '+46701234567')
         objective: What the call should accomplish (e.g. 'book a dentist appointment')
+        contact_name: Name of the person being called (e.g. 'Erik')
         context: Extra context for the AI (e.g. 'available times: Tuesday 10-12')
         first_message: What the AI says when the person picks up
         language: Language for the call ('sv' for Swedish, 'es' for Spanish, 'en' for English)
@@ -39,7 +41,10 @@ def make_phone_call(
     language_names = {"sv": "Swedish", "es": "Spanish", "en": "English"}
     lang_name = language_names.get(language, "Swedish")
 
+    contact_info = f"You are calling {contact_name}." if contact_name else ""
+
     system_prompt = f"""You are Glitch, Alianne's personal AI assistant, making a phone call on her behalf.
+{contact_info}
 
 ## Your objective for this call
 {objective}
@@ -66,14 +71,15 @@ def make_phone_call(
 
     # Default first message if not provided
     if not first_message:
-        # Build a natural greeting that explains why an assistant is calling
+        # Build a natural greeting with the contact's name
+        name_greeting = f" {contact_name}" if contact_name else ""
         objective_short = objective.split(".")[0]
         if language == "sv":
-            first_message = f"Hej! Jag är Glitch, Aliannes assistent. Jag ringer för att Alianne är upptagen just nu men hon vill {objective_short.lower()}."
+            first_message = f"Hej{name_greeting}! Jag är Glitch, Aliannes assistent. Jag ringer för att Alianne är upptagen just nu men hon vill {objective_short.lower()}."
         elif language == "es":
-            first_message = f"¡Hola! Soy Glitch, el asistente de Alianne. Te llamo porque Alianne está ocupada ahora mismo pero quiere {objective_short.lower()}."
+            first_message = f"¡Hola{name_greeting}! Soy Glitch, el asistente de Alianne. Te llamo porque Alianne está ocupada ahora mismo pero quiere {objective_short.lower()}."
         else:
-            first_message = f"Hi! I'm Glitch, Alianne's assistant. I'm calling because Alianne is busy right now but she'd like to {objective_short.lower()}."
+            first_message = f"Hi{name_greeting}! I'm Glitch, Alianne's assistant. I'm calling because Alianne is busy right now but she'd like to {objective_short.lower()}."
 
     # Map language to Deepgram transcriber language codes
     transcriber_languages = {"sv": "sv", "es": "es", "en": "en"}
