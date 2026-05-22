@@ -139,10 +139,10 @@ def _get_client() -> Client:
 
 
 def _find_page_id() -> str:
-    """Find or create the Glitch Dashboard page.
+    """Find the Glitch Dashboard page.
 
-    Searches for an existing page titled 'Glitch Dashboard'.
-    If not found, creates one.
+    The user must create a page called 'Glitch Dashboard' in Notion
+    and connect the Glitch integration to it.
     """
     client = _get_client()
 
@@ -156,22 +156,14 @@ def _find_page_id() -> str:
         title_prop = page.get("properties", {}).get("title", {})
         if title_prop:
             title_parts = title_prop.get("title", [])
-            if title_parts and "Glitch Dashboard" in title_parts[0].get("plain_text", ""):
-                logger.info("Found existing Glitch Dashboard page: %s", page["id"])
+            if title_parts and "Glitch" in title_parts[0].get("plain_text", ""):
+                logger.info("Found Glitch Dashboard page: %s", page["id"])
                 return page["id"]
 
-    # Create new page at top level
-    new_page = client.pages.create(
-        parent={"type": "workspace", "workspace": True},
-        properties={
-            "title": {
-                "title": [{"text": {"content": "Glitch Dashboard"}}]
-            }
-        },
-        icon={"type": "emoji", "emoji": "🤖"},
+    raise ValueError(
+        "No se encontró la página 'Glitch Dashboard' en Notion. "
+        "Créala manualmente y conecta la integración Glitch."
     )
-    logger.info("Created Glitch Dashboard page: %s", new_page["id"])
-    return new_page["id"]
 
 
 def _find_or_create_db(parent_page_id: str, db_key: str) -> str:
