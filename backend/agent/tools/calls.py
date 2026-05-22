@@ -88,7 +88,7 @@ def make_phone_call(
             },
             "model": {
                 "provider": "anthropic",
-                "model": "claude-haiku-4-20250414",
+                "model": "claude-haiku-4-5-20251001",
                 "temperature": 0.7,
                 "maxTokens": 150,
                 "messages": [
