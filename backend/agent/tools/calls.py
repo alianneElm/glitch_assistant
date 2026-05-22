@@ -88,9 +88,9 @@ def make_phone_call(
             },
             "model": {
                 "provider": "anthropic",
-                "model": "claude-sonnet-4-20250514",
+                "model": "claude-haiku-4-20250414",
                 "temperature": 0.7,
-                "maxTokens": 500,
+                "maxTokens": 150,
                 "messages": [
                     {
                         "role": "system",
@@ -98,6 +98,8 @@ def make_phone_call(
                     }
                 ],
             },
+            "silenceTimeoutSeconds": 20,
+            "maxDurationSeconds": 300,
         },
         "phoneNumberId": settings.vapi_phone_number_id,
         "customer": {
