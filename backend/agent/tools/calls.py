@@ -55,6 +55,10 @@ def make_phone_call(
         day_reference.append(f"  {day_names_en[date.weekday()]} ({day_names_sv[date.weekday()]}) = {date.strftime('%Y-%m-%d')}")
     day_reference_str = "\n".join(day_reference)
 
+    # Load existing events so the agent knows what times are busy
+    from backend.agent.tools.calendar import get_upcoming_events
+    existing_events = get_upcoming_events(days=14)
+
     system_prompt = f"""You are Glitch, Alianne's personal AI assistant, making a phone call on her behalf.
 {contact_info}
 
@@ -63,6 +67,9 @@ Today is {now.strftime('%A %Y-%m-%d %H:%M')} ({settings.user_timezone})
 
 ## Day reference (USE THIS for correct dates!)
 {day_reference_str}
+
+## Alianne's existing calendar (BUSY times — do NOT schedule here!)
+{existing_events}
 
 ## Your objective for this call
 {objective}
@@ -76,15 +83,11 @@ Today is {now.strftime('%A %Y-%m-%d %H:%M')} ({settings.user_timezone})
 - Don't ask "do you have a moment?" — your first message already covers the intro.
 - Keep responses to 2-3 short sentences. Be conversational and natural, not robotic.
 - React naturally to what they say — laugh, acknowledge, be human.
+- NEVER agree to a time that conflicts with Alianne's existing calendar events above.
+- If the person suggests a time that's busy, say "that time doesn't work for Alianne" and suggest an alternative.
 - If you accomplish the objective, confirm the details and end with something nice like "Alianne will be happy!"
 - If the person is unavailable or can't help, be understanding and thank them warmly.
-
-## IMPORTANT: After confirming an appointment or event
-- Once a date/time is confirmed, IMMEDIATELY use the create_event tool to save it to Alianne's calendar.
-- The event title should be from Alianne's perspective, e.g. "Fika with [person's name]", NOT "Fika with Alianne".
-- Use the name of the person you're calling, not Alianne's name, in the event title.
-- Also use send_whatsapp_message to notify Alianne with the confirmed details.
-- Do this BEFORE ending the call so nothing is forgotten.
+- Do NOT try to use tools. The calendar event will be created automatically after the call ends.
 """
 
     # Default first message if not provided
