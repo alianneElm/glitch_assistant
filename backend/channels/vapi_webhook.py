@@ -154,6 +154,11 @@ Current date/time: {now} ({tz})
 ## Transcript (last part)
 {transcript[-1000:] if transcript else "N/A"}
 
+IMPORTANT: This calendar belongs to Alianne. The event title must be from HER perspective.
+- Use the OTHER person's name in the title, NOT Alianne's name.
+- Example: "Fika with Erik", "Lunch with Sara", "Meeting with Dr. Johansson"
+- If the person's name is unclear from the transcript, use a descriptive title like "Fika" or "Dentist appointment".
+
 If an event was confirmed, respond with EXACTLY this JSON format (nothing else):
 {{"event": true, "summary": "Event title", "start_time": "YYYY-MM-DDTHH:MM:SS", "duration_minutes": 60, "description": "Brief description"}}
 

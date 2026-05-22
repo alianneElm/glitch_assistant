@@ -58,6 +58,8 @@ def make_phone_call(
 
 ## IMPORTANT: After confirming an appointment or event
 - Once a date/time is confirmed, IMMEDIATELY use the create_event tool to save it to Alianne's calendar.
+- The event title should be from Alianne's perspective, e.g. "Fika with [person's name]", NOT "Fika with Alianne".
+- Use the name of the person you're calling, not Alianne's name, in the event title.
 - Also use send_whatsapp_message to notify Alianne with the confirmed details.
 - Do this BEFORE ending the call so nothing is forgotten.
 """
