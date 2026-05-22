@@ -42,7 +42,7 @@ def get_session() -> Session:
 def init_db():
     """Create all tables if they don't exist."""
     # Import models so they register with Base
-    from backend.models import conversation, reminder  # noqa: F401
+    from backend.models import contact, conversation, reminder  # noqa: F401
 
     engine = get_engine()
     Base.metadata.create_all(bind=engine)
