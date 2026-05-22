@@ -8,11 +8,14 @@ the action and return the result so the agent can continue the conversation.
 import json
 import logging
 
+from anthropic import Anthropic
 from fastapi import APIRouter, Request
 
 from backend.agent.tools.calendar import create_event, get_todays_events, get_upcoming_events
 from backend.agent.tools.reminders import create_reminder, list_reminders, send_scheduled_message
 from backend.config import settings
+
+_anthropic = Anthropic(api_key=settings.anthropic_api_key)
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +114,7 @@ async def vapi_action(request: Request):
     if msg_type == "end-of-call-report":
         summary = message.get("summary", "")
         duration = message.get("duration", 0)
+        transcript = message.get("transcript", "")
         logger.info("Vapi call ended. Duration: %ss. Summary: %s", duration, summary[:200])
 
         # Send call summary to user via WhatsApp
@@ -123,4 +127,71 @@ async def vapi_action(request: Request):
             except Exception:
                 logger.exception("Failed to send call summary via WhatsApp")
 
+        # Try to extract and create calendar event from call results
+        if summary or transcript:
+            try:
+                _extract_and_create_event(summary, transcript)
+            except Exception:
+                logger.exception("Failed to extract event from call summary")
+
     return {"ok": True}
+
+
+def _extract_and_create_event(summary: str, transcript: str) -> None:
+    """Use Claude to extract event details from call summary and create calendar event."""
+    from datetime import datetime
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    tz = settings.user_timezone
+
+    prompt = f"""Analyze this phone call summary and transcript. If an appointment, meeting, or event was agreed upon, extract the details.
+
+Current date/time: {now} ({tz})
+
+## Call Summary
+{summary}
+
+## Transcript (last part)
+{transcript[-1000:] if transcript else "N/A"}
+
+If an event was confirmed, respond with EXACTLY this JSON format (nothing else):
+{{"event": true, "summary": "Event title", "start_time": "YYYY-MM-DDTHH:MM:SS", "duration_minutes": 60, "description": "Brief description"}}
+
+If NO event was confirmed (call failed, person unavailable, etc.), respond with:
+{{"event": false}}"""
+
+    response = _anthropic.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=200,
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    text = response.content[0].text.strip()
+    logger.info("Event extraction result: %s", text)
+
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        # Try to find JSON in the response
+        import re
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        if match:
+            data = json.loads(match.group())
+        else:
+            logger.warning("Could not parse event extraction response: %s", text)
+            return
+
+    if data.get("event"):
+        result = create_event(
+            summary=data["summary"],
+            start_time=data["start_time"],
+            duration_minutes=data.get("duration_minutes", 60),
+            description=data.get("description", ""),
+        )
+        logger.info("Auto-created calendar event: %s", result)
+
+        # Notify user
+        _send_whatsapp(
+            settings.my_whatsapp_number,
+            f"📅 Evento creado automáticamente: {data['summary']} — {data['start_time']}",
+        )

@@ -56,6 +56,11 @@ def make_phone_call(
 - If the person is unavailable or can't help, politely thank them and end the call.
 - Keep responses short and natural — this is a phone conversation, not an essay.
 - When you have all the information needed, summarize what was agreed and say goodbye.
+
+## IMPORTANT: After confirming an appointment or event
+- Once a date/time is confirmed, IMMEDIATELY use the create_event tool to save it to Alianne's calendar.
+- Also use send_whatsapp_message to notify Alianne with the confirmed details.
+- Do this BEFORE ending the call so nothing is forgotten.
 """
 
     # Default first message if not provided
