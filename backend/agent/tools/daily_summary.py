@@ -65,23 +65,7 @@ def _get_weather() -> str:
 
 
 def _get_bible_verse() -> str:
-    """Get a random Bible verse."""
-    try:
-        with httpx.Client(timeout=10) as client:
-            resp = client.get("https://bible-api.com/?random=verse&translation=reina-valera-1960")
-            if resp.status_code == 200:
-                data = resp.json()
-                ref = data.get("reference", "")
-                text = data.get("text", "").strip()
-                if text:
-                    # Trim to reasonable length
-                    if len(text) > 300:
-                        text = text[:297] + "..."
-                    return f"📖 {ref}\n\"{text}\""
-    except Exception:
-        logger.exception("Failed to get Bible verse")
-
-    # Fallback: curated list of short verses
+    """Get a random Bible verse in Spanish (Reina Valera)."""
     verses = [
         ("Filipenses 4:13", "Todo lo puedo en Cristo que me fortalece."),
         ("Salmos 118:24", "Este es el día que hizo Jehová; nos gozaremos y alegraremos en él."),
@@ -91,6 +75,19 @@ def _get_bible_verse() -> str:
         ("Salmos 23:1", "Jehová es mi pastor; nada me faltará."),
         ("Romanos 8:28", "Y sabemos que a los que aman a Dios, todas las cosas les ayudan a bien."),
         ("Mateo 11:28", "Venid a mí todos los que estáis trabajados y cargados, y yo os haré descansar."),
+        ("Josué 1:9", "Mira que te mando que te esfuerces y seas valiente; no temas ni desmayes, porque Jehová tu Dios estará contigo."),
+        ("Salmos 46:10", "Estad quietos, y conoced que yo soy Dios."),
+        ("Proverbios 16:3", "Encomienda a Jehová tus obras, y tus pensamientos serán afirmados."),
+        ("Isaías 40:31", "Los que esperan a Jehová tendrán nuevas fuerzas; levantarán alas como las águilas."),
+        ("Salmos 37:5", "Encomienda a Jehová tu camino, y confía en él; y él hará."),
+        ("Mateo 6:34", "No os afanéis por el día de mañana, porque el día de mañana traerá su afán."),
+        ("Romanos 15:13", "Y el Dios de esperanza os llene de todo gozo y paz en el creer."),
+        ("Salmos 91:1", "El que habita al abrigo del Altísimo morará bajo la sombra del Omnipotente."),
+        ("2 Timoteo 1:7", "Porque no nos ha dado Dios espíritu de cobardía, sino de poder, de amor y de dominio propio."),
+        ("Salmos 139:14", "Te alabaré; porque formidables, maravillosas son tus obras; estoy maravillado, y mi alma lo sabe muy bien."),
+        ("Lamentaciones 3:22-23", "Las misericordias de Jehová nunca decaen; nuevas son cada mañana; grande es tu fidelidad."),
+        ("Filipenses 4:6-7", "Por nada estéis afanosos, sino sean conocidas vuestras peticiones delante de Dios en toda oración."),
+        ("Hebreos 11:1", "Es, pues, la fe la certeza de lo que se espera, la convicción de lo que no se ve."),
     ]
     ref, text = random.choice(verses)
     return f"📖 {ref}\n\"{text}\""
