@@ -61,28 +61,22 @@ The creator has a lot on their plate and finds it hard to concentrate or remembe
 ## 🏗️ Architecture
 
 ```
-User Voice / WhatsApp
-        ↓
-Python Agent (Railway — cloud brain)
-        ↓
-┌─────────────────────────────────────────┐
-│ Claude API      → conversation/decisions │
-│ Gemini Pro      → Gmail, Calendar, docs  │
-│ Google Calendar → work + personal unified│
-│ Gmail API       → email read/send        │
-│ Yahoo IMAP      → secondary email        │
-│ Twilio          → WhatsApp + SMS         │
-│ ElevenLabs      → TTS natural voice      │
-│ Whisper STT     → voice transcription    │
-│ OpenWeatherMap  → real-time weather      │
-│ Google Maps API → traffic + routes       │
-│ Spotify API     → music control          │
-│ Google Nest API → smart home             │
-│ YouTube API     → video search           │
-│ Notion API      → dashboard              │
-│ PostgreSQL      → persistent data        │
-│ Redis + Celery  → task queue/schedulers  │
-└─────────────────────────────────────────┘
+WhatsApp (Twilio)  ←→  Python Agent (Railway)  ←→  Phone Calls (Vapi)
+                              ↓
+┌──────────────────────────────────────────────────┐
+│ Claude API (Sonnet) → chat conversation/decisions │
+│ Claude API (Haiku)  → voice agent (via Vapi)      │
+│ Vapi + Deepgram     → outbound AI phone calls     │
+│ Twilio              → WhatsApp messaging           │
+│ Google Calendar     → multi-calendar (5 calendars) │
+│ OpenWeatherMap      → weather + umbrella alerts     │
+│ Notion API          → dashboard (5 databases)       │
+│ PostgreSQL          → contacts, reminders, memory   │
+│ APScheduler         → cron jobs & scheduled tasks   │
+│ Pillow              → daily summary image cards     │
+│ ElevenLabs          → TTS voice (future ESP32)      │
+│ Whisper STT         → voice transcription           │
+└──────────────────────────────────────────────────┘
 ```
 
 ---
@@ -122,27 +116,28 @@ One agent brain. Multiple physical bodies. Same memory across all.
 
 ## 🔧 Technical Stack
 
-| Layer | Technology | Purpose |
-|-------|-----------|---------|
-| Backend | Python 3.12 + FastAPI | Main API |
-| Agent | LangGraph + LangChain | Orchestration |
-| AI Primary | Claude API (Sonnet) | Conversation & decisions |
-| AI Google | Gemini Pro (already owned) | Gmail, Calendar, long docs |
-| Voice Input | OpenAI Whisper | STT (free) |
-| Voice Output | ElevenLabs | Natural TTS multilingual |
-| Database | PostgreSQL | Persistent data |
-| Task Queue | Redis + Celery | Reminders & schedulers |
-| Messaging | Twilio WhatsApp + SMS | Primary channel |
-| Email | Gmail API + Yahoo IMAP | Read & send |
-| Calendar | Google Calendar API | Work + personal |
-| Dashboard | Notion API | Visual overview |
-| Weather | OpenWeatherMap | Real-time |
-| Traffic | Google Maps API | Routes |
-| Music | Spotify API | Voice control |
-| Smart Home | Google Nest/Home API | Home control |
-| Server | Railway | Deploy & hosting |
-| ESP32 Firmware | MicroPython + LVGL | Physical devices |
-| Hotword | Porcupine (Picovoice) | Offline wake word |
+| Layer | Technology | Status | Purpose |
+|-------|-----------|--------|---------|
+| Backend | Python 3.12 + FastAPI | ✅ | Main API |
+| Agent | Anthropic Messages API (tool use) | ✅ | Orchestration — no LangGraph |
+| AI Chat | Claude Sonnet 4 | ✅ | WhatsApp conversation & decisions |
+| AI Voice | Claude Haiku | ✅ | Vapi voice agent (fast responses) |
+| Phone Calls | Vapi + Deepgram nova-3 | ✅ | Outbound AI phone calls |
+| Voice Input | OpenAI Whisper | ✅ | STT for WhatsApp voice notes |
+| Voice Output | ElevenLabs | ✅ | Natural TTS multilingual |
+| Database | PostgreSQL (Railway) | ✅ | Contacts, reminders, conversations |
+| Scheduler | APScheduler (CronTrigger) | ✅ | Reminders & daily summary cron |
+| Messaging | Twilio WhatsApp | ✅ | Primary channel + scheduled msgs |
+| Calendar | Google Calendar API | ✅ | 5 calendars (Google + Outlook ICS) |
+| Dashboard | Notion API | ✅ | 5 databases under Glitch Dashboard |
+| Weather | OpenWeatherMap | ✅ | Forecast + umbrella alerts |
+| Image Gen | Pillow | ✅ | Daily summary dark-theme cards |
+| Server | Railway | ✅ | Deploy & hosting |
+| Email | Gmail API + Yahoo IMAP | 📋 Phase 2 | Read & send |
+| Music | Spotify API | 📋 Phase 3 | Voice control |
+| Smart Home | Google Nest/Home API | 📋 Phase 3 | Home control |
+| ESP32 Firmware | MicroPython + LVGL | 📋 Phase 4 | Physical devices |
+| Hotword | Porcupine (Picovoice) | 📋 Phase 4 | Offline wake word |
 
 ---
 
@@ -152,34 +147,42 @@ One agent brain. Multiple physical bodies. Same memory across all.
 
 ```env
 # Anthropic
-ANTHROPIC_API_KEY=✅ ready (not shown for security)
+ANTHROPIC_API_KEY=✅ ready
 
 # Twilio
-TWILIO_ACCOUNT_SID=✅ stored in .env (not shown for security)
-TWILIO_AUTH_TOKEN=✅ regenerated and stored in .env
+TWILIO_ACCOUNT_SID=✅ stored
+TWILIO_AUTH_TOKEN=✅ stored
 TWILIO_WHATSAPP_NUMBER=whatsapp:+14155238886
 MY_WHATSAPP_NUMBER=whatsapp:+46762547179
 
+# Vapi (AI phone calls)
+VAPI_API_KEY=✅ stored
+VAPI_ASSISTANT_ID=1701aba3-771c-46f6-a92a-7e16cfdc514d
+VAPI_PHONE_NUMBER_ID=2a462aa1-2b30-42b2-afe8-ed36f2f9a2db
+
 # ElevenLabs
-ELEVENLABS_API_KEY=✅ ready (not shown for security)
+ELEVENLABS_API_KEY=✅ ready
 ELEVENLABS_VOICE_ID=oSMrjv0Y90fQz1KX393H
 ELEVENLABS_MODEL=eleven_multilingual_v2
-ELEVENLABS_VOICE_NAME=Glitch (custom created voice)
 
 # Google
 GOOGLE_PROJECT_ID=glitch-assistant-497009
-GOOGLE_CREDENTIALS_JSON=✅ downloaded as JSON desktop app
-GOOGLE_CALENDAR_ID=primary
-# OAuth scopes: auth/calendar, gmail.modify, gmail.send, gmail.readonly
+GOOGLE_CREDENTIALS_JSON=✅ OAuth desktop app
+GOOGLE_TOKEN_JSON=✅ stored in Railway
+# OAuth scopes: auth/calendar
+# Calendars detected: Gmail primary, Calendario, Familia,
+#   Alianne Newton (Outlook ICS, hidden), Festivos en España (hidden)
 
-# Railway PostgreSQL (auto-provided by Railway)
-DATABASE_URL=auto_provided_by_railway
-
-# Redis (auto-provided by Railway)
-REDIS_URL=auto_provided_by_railway
+# Notion
+NOTION_API_KEY=✅ stored (internal integration)
+# Dashboard page: "Glitch Dashboard" (user-created, integration connected)
+# Databases: Agenda, Recordatorios, To-Do, Lista de Compras, Log Glitch
 
 # Weather
-OPENWEATHERMAP_API_KEY=pending
+OPENWEATHERMAP_API_KEY=✅ stored
+
+# Railway PostgreSQL (auto-provided)
+DATABASE_URL=auto_provided_by_railway
 
 # User Config
 USER_CITY=Trelleborg
@@ -194,66 +197,64 @@ USER_WHATSAPP=+46762547179
 
 ```
 [✅] Anthropic API key — ready
-[✅] Railway account — trial active (30 days / $5)
-[✅] Twilio account — sandbox active
+[✅] Railway — deployed and running
+     Domain: alluring-courtesy-production-9b65.up.railway.app
+[✅] Twilio — sandbox active, webhook connected
      Sandbox number: +14155238886
-     Code: join tie-valley
-     ⚠️  Auth Token needs regeneration
-[✅] Google Cloud project — glitch-assistant-497009
-[✅] Google Calendar API — enabled
-[✅] Gmail API — enabled
-[✅] OAuth credentials — desktop app created + JSON downloaded
-     Scopes: calendar, gmail.modify, gmail.send, gmail.readonly
-[✅] ElevenLabs account — free plan (9,348 credits remaining)
-     Voice "Glitch" created with AI voice tool
-     Voice ID: oSMrjv0Y90fQz1KX393H
-     Model: eleven_multilingual_v2
-     API key created with minimal permissions
+[✅] Vapi — outbound calls working
+     Assistant ID configured, Deepgram nova-3 transcriber
+[✅] Google Calendar API — OAuth token stored, 5 calendars detected
+[✅] ElevenLabs — voice "Glitch" created
+[✅] OpenWeatherMap — API key stored, forecast working
+[✅] Notion — internal integration connected
+     Glitch Dashboard page with 5 databases
+[✅] PostgreSQL — tables: conversations, reminders, contacts
+[✅] First WhatsApp message sent and working
+[✅] First AI phone call made and working
+[✅] Daily summary cron jobs active (L-V 8:00, S-D 10:00)
 [ ] GitHub repo — create: glitch-assistant (private)
-[ ] Local dev environment setup
-[ ] First Railway deploy
-[ ] WhatsApp sandbox webhook connected
-[ ] First message to Glitch ✅
 ```
 
 ---
 
 ## 📅 Implementation Phases
 
-### Phase 1 — Core Agent (Weekend 1) ← START HERE
+### Phase 1 — Core Agent ✅ COMPLETE
 **Goal:** Talk to Glitch via WhatsApp. It understands and responds.
 
 **Deliverables:**
-- Python FastAPI project structure
-- LangGraph agent with Claude API
-- Twilio WhatsApp webhook (receive + send messages)
-- Whisper STT — transcribe incoming voice notes
-- ElevenLabs TTS — respond with voice
-- Google Calendar — read + create events
-- Basic reminders (Redis + Celery)
-- PostgreSQL — conversation memory
-- Deploy on Railway with env vars
-- Daily voice briefing (morning summary)
+- ✅ Python FastAPI project structure
+- ✅ Anthropic Messages API with tool use (replaced LangGraph)
+- ✅ Twilio WhatsApp webhook (receive + send messages)
+- ✅ Whisper STT — transcribe incoming voice notes
+- ✅ ElevenLabs TTS — respond with voice
+- ✅ Google Calendar — read + create events (multi-calendar with conflict detection)
+- ✅ Reminders with APScheduler (replaced Redis + Celery)
+- ✅ PostgreSQL — conversation memory + contacts
+- ✅ Deploy on Railway with env vars
+- ✅ Daily summary as image card (L-V 8:00, S-D 10:00)
+- ✅ Outbound AI phone calls via Vapi
+- ✅ Contacts system (save, lookup, auto-resolve by name)
+- ✅ WhatsApp messaging to contacts (immediate + scheduled)
 
-**Result:** Send voice note → Glitch transcribes → understands → acts → confirms by voice
+**Result:** Send voice/text → Glitch understands → acts → confirms. Can also make AI phone calls.
 
 ---
 
-### Phase 2 — Full Productivity (Weekend 2)
+### Phase 2 — Full Productivity (Weekend 2) — PARTIALLY DONE
+- ✅ Dynamic shopping list (Notion — add items, clear/archive list)
+- ✅ Notion API — full dashboard (5 databases: Agenda, To-Do, Compras, Recordatorios, Log)
+- ✅ Scheduled messages with contact resolution
+- ✅ To-do list management (add, update status)
 - Gmail API — event detection in emails
 - Yahoo Mail — IMAP/SMTP
 - Smart spam filter with auto-unsubscribe
-- Dynamic shopping list (create, clear, history)
-- Scheduled messages/emails with approval flow
-- Claude/Gemini smart router
-- Notion API — full dashboard
 - Automatic event detection from incoming emails
 
 ---
 
-### Phase 3 — Context & Intelligence (Weekend 3)
-- OpenWeatherMap — real-time weather
-- Google Maps API — traffic & routes
+### Phase 3 — Context & Intelligence (Weekend 3) — PARTIALLY DONE
+- ✅ OpenWeatherMap — forecast + umbrella alerts (in daily summary)
 - WiFi trigger via iOS Shortcuts
 - Smart alerts (event at home but you left)
 - Spotify API — voice music control
@@ -286,16 +287,17 @@ USER_WHATSAPP=+46762547179
 
 ## 🚀 Future Features Backlog
 
-### 📞 Automatic Phone Calls (Phase 4-5)
+### 📞 Automatic Phone Calls ✅ IMPLEMENTED
 ```
-"Glitch, find a dentist in Trelleborg and book next week"
-→ Twilio Voice calls clinic
-→ ElevenLabs conducts conversation
-→ Whisper transcribes response
-→ Appointment confirmed + Calendar updated
+"Glitch, llama a María y agenda una cita para el jueves"
+→ Vapi calls contact (auto-resolved from saved contacts)
+→ Deepgram nova-3 transcribes in real-time
+→ Claude Haiku conducts conversation with calendar context
+→ Post-call webhook creates event + syncs to Notion
+→ Conflict detection prevents double-booking
 ```
-Tech: Twilio Voice + ElevenLabs + Whisper
-Priority: Post-launch
+Tech: Vapi + Deepgram + Claude Haiku + Google Calendar
+Status: Working in production
 
 ### 📧 Appointment Booking via Email (Phase 2)
 ```
@@ -311,9 +313,23 @@ Find professionals → analyze reviews → recommend best option
 Tech: Google Maps API + web search
 Priority: Phase 3
 
+### 💰 Control de Gastos ✅ IMPLEMENTED
+```
+"Gasté 450kr en ICA" → registers expense with auto-categorization
+"¿Cuánto gasté este mes?" → summary by category with % bars
+"Mis gastos de esta semana" → detailed list with totals
+```
+Tech: Notion DB (Gastos) + Claude auto-categorization
+Status: Working in production
+
 ### 📱 Missed Call Response (Android only)
 iOS doesn't allow call access from external apps.
 Android: Tasker detects missed call → POST to agent → SMS sent
+
+### 🧪 Experimental (Future)
+- **Dashboard web** — React mini-app with stats: expenses, exercise, nutrition, memories
+- **Automatizaciones condicionales** — "Si mañana llueve, cancela hiking y avísame" (if/then rules)
+- **Home Assistant integration** — Smart home control: lights, heating, etc.
 
 ---
 
@@ -335,20 +351,19 @@ Android: Tasker detects missed call → POST to agent → SMS sent
 - ESP32 speaker → at home/pocket without phone
 - ElevenLabs multilingual v2 → same voice in ES/SV/EN
 
-### AI Router Logic
+### AI Model Strategy
 ```python
-if task in ["gmail", "calendar", "drive", "weather", "long_doc"]:
-    use Gemini Pro  # native Google, real-time
-else:
-    use Claude API  # conversation, reasoning, writing
+# WhatsApp chat → Claude Sonnet (best reasoning + tool use)
+# Vapi voice agent → Claude Haiku (fast, low latency for calls)
+# No Gemini router — Claude handles everything via Anthropic Messages API
 ```
 
-### Shopping List Design
-- Persists between sessions
-- "Clear list" archives (never hard deletes)
-- History always available
-- "Repeat last week's list" supported
-- Auto-send when leaving home (WiFi trigger)
+### Shopping List Design (via Notion)
+- Stored in Notion "Lista de Compras" database
+- Categories: Comida, Hogar, Higiene, Otro
+- "Clear list" archives items (never hard deletes)
+- "Ya hice las compras" → archives all, fresh list ready
+- Future: Auto-send when leaving home (WiFi trigger)
 
 ### Multi-device Principle
 ```python
@@ -365,51 +380,46 @@ payload = {
 
 ```
 glitch-assistant/
-├── README.md
-├── GLITCH_CONTEXT.md          ← this file
-├── .env.example
-├── .gitignore
-├── Dockerfile
+├── GLITCH_CONTEXT.md            ← this file
+├── Dockerfile                   ← includes fonts-dejavu-core for Pillow
 ├── railway.toml
-├── requirements.txt
+├── requirements.txt             ← Pillow, notion-client, anthropic, etc.
+├── google_credentials.json      ← OAuth desktop app (not committed)
+├── token.json                   ← OAuth refresh token (not committed)
 ├── backend/
-│   ├── main.py                ← FastAPI entry point
-│   ├── config.py              ← settings & env vars
+│   ├── __init__.py
+│   ├── main.py                  ← FastAPI app, lifespan, cron jobs, /media endpoint
+│   ├── config.py                ← Pydantic settings from env vars
 │   ├── agent/
 │   │   ├── __init__.py
-│   │   ├── graph.py           ← LangGraph agent
-│   │   ├── prompts.py         ← system prompts
-│   │   ├── router.py          ← Claude/Gemini router
+│   │   ├── brain.py             ← Anthropic Messages API with tool use
+│   │   ├── prompts.py           ← system prompt (ES/SV/EN)
 │   │   └── tools/
 │   │       ├── __init__.py
-│   │       ├── calendar.py    ← Google Calendar
-│   │       ├── gmail.py       ← Gmail read/send
-│   │       ├── reminders.py   ← Redis reminders
-│   │       ├── shopping.py    ← Shopping list
-│   │       └── weather.py     ← OpenWeatherMap
+│   │       ├── calendar.py      ← Google Calendar (multi-calendar, conflict detection)
+│   │       ├── calls.py         ← Vapi outbound phone calls
+│   │       ├── contacts.py      ← contact CRUD (name → phone auto-resolve)
+│   │       ├── daily_summary.py ← weather + agenda + verse → image card
+│   │       ├── reminders.py     ← APScheduler reminders + send_whatsapp
+│   │       └── summary_card.py  ← Pillow dark-theme image generator
 │   ├── channels/
-│   │   ├── whatsapp.py        ← Twilio webhook
-│   │   └── device.py          ← ESP32 endpoint
+│   │   ├── __init__.py
+│   │   ├── whatsapp.py          ← Twilio WhatsApp webhook
+│   │   └── vapi_webhook.py      ← Vapi post-call webhook (event creation)
 │   ├── services/
-│   │   ├── voice.py           ← ElevenLabs TTS
-│   │   ├── transcription.py   ← Whisper STT
-│   │   └── scheduler.py       ← Celery tasks
+│   │   ├── __init__.py
+│   │   ├── database.py          ← SQLAlchemy engine + session
+│   │   ├── notion.py            ← Notion API (5 databases)
+│   │   ├── scheduler.py         ← APScheduler setup
+│   │   ├── transcription.py     ← Whisper STT
+│   │   └── voice.py             ← ElevenLabs TTS
 │   └── models/
-│       ├── user.py
-│       ├── reminder.py
-│       ├── message.py
-│       └── shopping_list.py
-├── esp32/
-│   ├── main.py
-│   ├── mascot/
-│   │   ├── animations.py
-│   │   └── states.py
-│   └── audio/
-│       ├── capture.py
-│       └── playback.py
-└── docs/
-    ├── ROADMAP.md
-    └── FUTURE.md
+│       ├── __init__.py
+│       ├── contact.py           ← Contact model (name, phone, language)
+│       ├── conversation.py      ← Conversation history
+│       └── reminder.py          ← Reminder model
+└── esp32/                       ← Phase 4 (hardware device)
+    └── (pending)
 ```
 
 ---
@@ -429,14 +439,14 @@ glitch-assistant/
 | Service | Cost |
 |---------|------|
 | Railway | $5 |
-| Claude API | $8-12 |
-| Twilio WhatsApp + number | $6 |
+| Claude API (Sonnet + Haiku) | $8-12 |
+| Twilio WhatsApp | $6 |
 | ElevenLabs | $5 |
-| Gemini Pro | $0 owned |
-| Google APIs | $0 free |
+| Vapi (phone calls) | $5-10 (usage-based) |
+| Google Calendar API | $0 free |
 | Notion | $0 free |
 | OpenWeatherMap | $0 free |
-| **Total** | **~$24-28/mo** |
+| **Total** | **~$29-38/mo** |
 
 ---
 
@@ -459,23 +469,13 @@ NOW        → Build for yourself. Be user #1.
 
 ---
 
-## 🚨 Pending Actions Before First Deploy
+## 🚨 Pending Actions
 
 ```
-1. ⚠️  REGENERATE Twilio Auth Token
-   (was visible in chat session)
-
-2. Create GitHub repo: glitch-assistant (private)
-
-3. Set up local Python environment
-
-4. Add google_credentials.json to project
-   (never commit to git — use Railway env vars)
-
-5. Connect Twilio sandbox webhook to Railway URL
-   after first deploy
-
-6. Test first WhatsApp message to Glitch
+1. Create GitHub repo: glitch-assistant (private)
+2. Re-save contacts via WhatsApp (DB was reset during development)
+3. Gmail API integration (Phase 2)
+4. ESP32 hardware setup when device arrives (June 12)
 ```
 
 ---
@@ -487,18 +487,24 @@ When starting a new Claude session (here or Claude Code):
 ```
 "Read GLITCH_CONTEXT.md and let's continue
  building from where we left off.
- Current status: all APIs configured,
- next step is Phase 1 code implementation."
+ Current status: Phase 1 complete, working on Phase 2."
 ```
 
-Claude Code command to start:
+Deploy command:
 ```bash
-claude "Read GLITCH_CONTEXT.md and help me 
-build Phase 1 of the Glitch assistant project"
+railway up    # Force deploy from local files
+```
+
+Test endpoints:
+```
+POST /test/daily-summary     # Trigger daily summary manually
+GET  /media/{filename}       # Serve generated images
+POST /webhook/whatsapp       # Twilio WhatsApp webhook
+POST /webhook/vapi           # Vapi post-call webhook
 ```
 
 ---
 
-*Last updated: May 21, 2026*
-*Document version: 2.0*
-*Status: All APIs configured ✅ — Ready for Phase 1 code*
+*Last updated: May 22, 2026*
+*Document version: 3.0*
+*Status: Phase 1 complete ✅ — Phase 2 in progress (email pending)*

@@ -2,8 +2,8 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Query
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
 from backend.channels.vapi_webhook import router as vapi_router
 from backend.channels.whatsapp import router as whatsapp_router
@@ -69,8 +69,71 @@ async def lifespan(app: FastAPI):
     )
     logger.info("Daily summary scheduled: Mon-Fri 08:00, Sat-Sun 10:00")
 
+    # Schedule proactive event alerts (every 5 minutes)
+    from apscheduler.triggers.interval import IntervalTrigger
+    from backend.agent.tools.event_alerts import check_upcoming_events
+
+    scheduler.add_job(
+        check_upcoming_events,
+        trigger=IntervalTrigger(minutes=5),
+        id="event_alerts",
+        replace_existing=True,
+    )
+    logger.info("Event alerts scheduled: every 5 minutes")
+
+    # Schedule email event detection (every 30 minutes)
+    from backend.agent.tools.email_events import check_emails_for_events
+
+    scheduler.add_job(
+        check_emails_for_events,
+        trigger=IntervalTrigger(minutes=30),
+        id="email_event_detection",
+        replace_existing=True,
+    )
+    logger.info("Email event detection scheduled: every 30 minutes")
+
+    # Configure Vapi phone number for inbound calls
+    if settings.vapi_api_key and settings.vapi_phone_number_id:
+        try:
+            _configure_vapi_inbound()
+        except Exception:
+            logger.exception("Failed to configure Vapi inbound calls")
+
     yield
     stop_scheduler()
+
+
+def _configure_vapi_inbound():
+    """Configure the Vapi phone number to route inbound calls to our webhook."""
+    import httpx
+
+    # Get the Railway public URL
+    railway_domain = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "")
+    if not railway_domain:
+        logger.warning("RAILWAY_PUBLIC_DOMAIN not set, skipping Vapi inbound config")
+        return
+
+    server_url = f"https://{railway_domain}/vapi/action"
+
+    with httpx.Client(timeout=15) as client:
+        # Remove assistantId so Vapi asks our server via assistant-request webhook.
+        # Outbound calls still work because assistantId is passed per-call in the payload.
+        response = client.patch(
+            f"https://api.vapi.ai/phone-number/{settings.vapi_phone_number_id}",
+            headers={
+                "Authorization": f"Bearer {settings.vapi_api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "assistantId": None,
+                "serverUrl": server_url,
+            },
+        )
+
+        if response.status_code == 200:
+            logger.info("Vapi inbound calls configured → %s", server_url)
+        else:
+            logger.error("Failed to configure Vapi inbound: %s", response.text[:300])
 
 
 app = FastAPI(title="Glitch Assistant", version="0.1.0", lifespan=lifespan)
@@ -82,6 +145,9 @@ app.include_router(vapi_router)
 @app.get("/audio/{filename}")
 async def serve_audio(filename: str):
     """Serve temporary audio files for Twilio to fetch."""
+    # Prevent path traversal — only allow simple filenames
+    if "/" in filename or "\\" in filename or filename.startswith("."):
+        return {"error": "invalid filename"}
     filepath = os.path.join("/tmp", filename)
     if not os.path.exists(filepath):
         return {"error": "not found"}
@@ -91,6 +157,9 @@ async def serve_audio(filename: str):
 @app.get("/media/{filename}")
 async def serve_media(filename: str):
     """Serve temporary media files (images, etc.) for Twilio to fetch."""
+    # Prevent path traversal — only allow simple filenames
+    if "/" in filename or "\\" in filename or filename.startswith("."):
+        return {"error": "invalid filename"}
     filepath = os.path.join("/tmp", filename)
     if not os.path.exists(filepath):
         return {"error": "not found"}
@@ -122,6 +191,44 @@ async def test_daily_summary():
         return {"status": "sent"}
     except Exception as e:
         return {"status": "error", "detail": str(e)}
+
+
+# --- Spotify OAuth endpoints ---
+
+@app.get("/spotify/login")
+async def spotify_login():
+    """Redirect user to Spotify authorization page."""
+    from backend.services.spotify_auth import get_auth_url
+    return RedirectResponse(get_auth_url())
+
+
+@app.get("/spotify/callback")
+async def spotify_callback(code: str = Query(None), error: str = Query(None)):
+    """Handle Spotify OAuth callback."""
+    if error:
+        return HTMLResponse(f"<h2>Error: {error}</h2><p>Spotify authorization was denied.</p>")
+
+    if not code:
+        return HTMLResponse("<h2>Error: no authorization code received.</h2>")
+
+    try:
+        from backend.services.spotify_auth import exchange_code
+        exchange_code(code)
+        return HTMLResponse(
+            "<h1>Spotify conectado a Glitch!</h1>"
+            "<p>Ya puedes controlar tu musica desde WhatsApp.</p>"
+            "<p>Prueba enviando: <b>pon Despacito</b></p>"
+        )
+    except Exception as e:
+        logger.exception("Spotify callback failed")
+        return HTMLResponse(f"<h2>Error connecting Spotify</h2><p>{e}</p>")
+
+
+@app.get("/spotify/status")
+async def spotify_status():
+    """Check Spotify connection status."""
+    from backend.services.spotify_auth import is_authenticated
+    return {"connected": is_authenticated()}
 
 
 if __name__ == "__main__":

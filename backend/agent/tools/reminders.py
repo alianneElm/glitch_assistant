@@ -1,6 +1,7 @@
 import logging
 import uuid
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from apscheduler.triggers.date import DateTrigger
 from twilio.rest import Client
@@ -48,9 +49,8 @@ def create_reminder(reminder_text: str, remind_at: str, user_whatsapp: str = "")
     except ValueError:
         return f"No entendí la fecha '{remind_at}'. Usa formato como '2026-05-22T15:00:00'."
 
-    now = datetime.now().astimezone()
+    now = datetime.now(ZoneInfo(settings.user_timezone))
     if remind_dt.tzinfo is None:
-        from zoneinfo import ZoneInfo
         remind_dt = remind_dt.replace(tzinfo=ZoneInfo(settings.user_timezone))
 
     if remind_dt <= now:
@@ -109,7 +109,7 @@ def list_reminders() -> str:
             reminders = (
                 session.query(ReminderModel)
                 .filter(ReminderModel.sent == False)
-                .filter(ReminderModel.remind_at > datetime.now().astimezone())
+                .filter(ReminderModel.remind_at > datetime.now(ZoneInfo(settings.user_timezone)))
                 .order_by(ReminderModel.remind_at)
                 .all()
             )
@@ -136,7 +136,7 @@ def list_todays_reminders() -> str:
         from backend.services.database import get_session
         session = get_session()
         try:
-            now = datetime.now().astimezone()
+            now = datetime.now(ZoneInfo(settings.user_timezone))
             end_of_day = now.replace(hour=23, minute=59, second=59)
             reminders = (
                 session.query(ReminderModel)
@@ -218,6 +218,33 @@ def _delete_reminder_from_scheduler(reminder_text: str) -> str:
     return f"No encontré un recordatorio con '{reminder_text}'."
 
 
+def send_sms(to_phone: str, message: str) -> str:
+    """Send an SMS message immediately to a contact.
+
+    Args:
+        to_phone: Recipient phone number (e.g. '+46701234567')
+        message: Message text to send
+    """
+    if not settings.twilio_phone_number:
+        return "❌ No hay número de Twilio configurado para SMS. Configura TWILIO_PHONE_NUMBER."
+
+    to_phone = to_phone.strip()
+    if not to_phone.startswith("+"):
+        to_phone = "+" + to_phone
+
+    try:
+        _twilio_client.messages.create(
+            from_=settings.twilio_phone_number,
+            to=to_phone,
+            body=message,
+        )
+        logger.info("SMS sent to %s: %s", to_phone, message[:80])
+        return f"✅ SMS enviado a {to_phone}"
+    except Exception as e:
+        logger.exception("Failed to send SMS to %s", to_phone)
+        return f"❌ Error al enviar SMS: {e}"
+
+
 def send_whatsapp(to_phone: str, message: str) -> str:
     """Send a WhatsApp message immediately to a contact.
 
@@ -265,9 +292,8 @@ def send_scheduled_message(to_phone: str, message: str, send_at: str) -> str:
     except ValueError:
         return f"No entendí la fecha '{send_at}'. Usa formato como '2026-05-22T15:00:00'."
 
-    now = datetime.now().astimezone()
+    now = datetime.now(ZoneInfo(settings.user_timezone))
     if send_dt.tzinfo is None:
-        from zoneinfo import ZoneInfo
         send_dt = send_dt.replace(tzinfo=ZoneInfo(settings.user_timezone))
 
     if send_dt <= now:
@@ -320,7 +346,7 @@ def reload_reminders_from_db():
         from backend.services.database import get_session
         session = get_session()
         try:
-            now = datetime.now().astimezone()
+            now = datetime.now(ZoneInfo(settings.user_timezone))
             pending = (
                 session.query(ReminderModel)
                 .filter(ReminderModel.sent == False)

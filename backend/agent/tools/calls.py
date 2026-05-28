@@ -42,6 +42,7 @@ def make_phone_call(
 
     # Build dynamic system prompt for this specific call
     from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
 
     language_names = {"sv": "Swedish", "es": "Spanish", "en": "English"}
     lang_name = language_names.get(language, "Swedish")
@@ -49,7 +50,7 @@ def make_phone_call(
     contact_info = f"You are calling {contact_name}." if contact_name else ""
 
     # Build day-of-week reference so the model gets dates right
-    now = datetime.now()
+    now = datetime.now(ZoneInfo(settings.user_timezone))
     day_names_sv = ["måndag", "tisdag", "onsdag", "torsdag", "fredag", "lördag", "söndag"]
     day_names_en = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     day_reference = []
@@ -67,6 +68,14 @@ def make_phone_call(
         logger.exception("Failed to load calendar for call")
         busy_times = "WARNING: Could not load calendar."
 
+    # Personal info for appointments
+    personal_info = f"""## Alianne's personal info (share ONLY when needed for appointments)
+- Full name: {settings.user_first_name} {settings.user_last_name}
+- Phone: {settings.user_phone}
+- Email: {settings.user_email}
+- Personnummer: {settings.user_personnummer} (ONLY share for medical/dental appointments when explicitly asked)
+- City: {settings.user_city}"""
+
     system_prompt = f"""You are Glitch, Alianne's personal AI assistant, making a phone call on her behalf.
 {contact_info}
 
@@ -76,9 +85,12 @@ Today is {now.strftime('%A %Y-%m-%d %H:%M')} ({settings.user_timezone})
 ## Day reference (USE THIS for correct dates!)
 {day_reference_str}
 
-## ⛔ ALIANNE'S BUSY TIMES — SHE CANNOT MEET AT THESE TIMES:
+{personal_info}
+
+## ⛔ ALIANNE'S BUSY TIMES — SHE ABSOLUTELY CANNOT MEET AT THESE TIMES:
 {busy_times}
-⛔ If someone proposes ANY of the times above, you MUST say "Alianne is busy then" and suggest a different time.
+
+⛔⛔⛔ CRITICAL RULE: Before agreeing to ANY time, CHECK the list above. If the proposed time overlaps with ANY busy slot, you MUST say "Alianne is busy then" and suggest a DIFFERENT time. NEVER double-book. When in doubt, suggest a time that is clearly not on the list.
 
 ## Your objective for this call
 {objective}
@@ -169,6 +181,8 @@ Today is {now.strftime('%A %Y-%m-%d %H:%M')} ({settings.user_timezone})
                     "contact_name": contact_name,
                     "objective": objective,
                     "phone_number": phone_number,
+                    "language": language,
+                    "retries": 0,
                 }
                 logger.info("Call initiated: %s to %s (contact: %s, objective: %s)", call_id, phone_number, contact_name, objective[:50])
                 return f"✅ Llamada iniciada a {phone_number}. ID: {call_id}. Te avisaré cuando termine."

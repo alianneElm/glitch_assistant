@@ -12,7 +12,10 @@ client = ElevenLabs(api_key=settings.elevenlabs_api_key)
 
 
 def generate_voice(text: str) -> str | None:
-    """Generate speech from text using ElevenLabs. Returns path to temp mp3 file."""
+    """Generate speech from text using ElevenLabs. Returns path to temp mp3 file.
+
+    The caller is responsible for deleting the file after use (os.unlink).
+    """
     try:
         audio_generator = client.text_to_speech.convert(
             voice_id=settings.elevenlabs_voice_id,
