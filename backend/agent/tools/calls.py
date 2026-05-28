@@ -121,11 +121,11 @@ Today is {now.strftime('%A %Y-%m-%d %H:%M')} ({settings.user_timezone})
         name_greeting = f" {contact_name}" if contact_name else ""
         objective_short = objective.split(".")[0]
         if language == "sv":
-            first_message = f"Hej{name_greeting}! Jag är Glitch, Aliannes assistent. Jag ringer för att Alianne är upptagen just nu men hon vill {objective_short.lower()}."
+            first_message = f"Hej{name_greeting}! Jag är Glitch, Aliannes personliga AI-assistent. Alianne är upptagen just nu så hon bad mig ringa. Hon vill {objective_short.lower()}."
         elif language == "es":
-            first_message = f"¡Hola{name_greeting}! Soy Glitch, el asistente de Alianne. Te llamo porque Alianne está ocupada ahora mismo pero quiere {objective_short.lower()}."
+            first_message = f"¡Hola{name_greeting}! Soy Glitch, el asistente personal de IA de Alianne. Alianne está ocupada ahora mismo así que me pidió llamar. Ella quiere {objective_short.lower()}."
         else:
-            first_message = f"Hi{name_greeting}! I'm Glitch, Alianne's assistant. I'm calling because Alianne is busy right now but she'd like to {objective_short.lower()}."
+            first_message = f"Hi{name_greeting}! I'm Glitch, Alianne's personal AI assistant. Alianne is busy right now so she asked me to call. She'd like to {objective_short.lower()}."
 
     # Map language to Deepgram transcriber language codes
     transcriber_languages = {"sv": "sv", "es": "es", "en": "en"}
