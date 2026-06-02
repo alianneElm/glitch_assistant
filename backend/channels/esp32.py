@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse
 
 from backend.agent.brain import get_response
 from backend.config import settings
-from backend.services.voice import generate_voice
+from backend.services.voice import generate_voice, generate_voice_pcm
 
 logger = logging.getLogger(__name__)
 
@@ -101,9 +101,10 @@ async def esp32_voice(
             pass
 
         if not transcript:
+            error_detail = getattr(_transcribe_wav, '_last_error', 'unknown')
             return JSONResponse(content={
                 "status": "error",
-                "message": "Could not transcribe audio",
+                "message": f"Could not transcribe audio: {error_detail}",
                 "transcript": "",
                 "response": "",
                 "audio_url": "",
@@ -120,19 +121,28 @@ async def esp32_voice(
 
         logger.info("ESP32 voice reply: %s", reply[:100])
 
-        # Generate TTS audio
+        # Generate TTS audio — PCM WAV for ESP32 playback
         audio_url = ""
+        pcm_url = ""
         if settings.elevenlabs_api_key:
+            # MP3 for general use
             audio_path = generate_voice(reply)
             if audio_path:
                 filename = os.path.basename(audio_path)
                 audio_url = f"https://{_BASE_URL}/audio/{filename}"
+
+            # PCM WAV for ESP32 speaker (16kHz 16-bit mono)
+            pcm_path = generate_voice_pcm(reply)
+            if pcm_path:
+                pcm_filename = os.path.basename(pcm_path)
+                pcm_url = f"https://{_BASE_URL}/audio/{pcm_filename}"
 
         return JSONResponse(content={
             "status": "success",
             "transcript": transcript,
             "response": reply,
             "audio_url": audio_url,
+            "pcm_url": pcm_url,
         })
 
     except Exception:
@@ -146,22 +156,38 @@ async def esp32_voice(
 async def _transcribe_wav(wav_path: str) -> str:
     """Transcribe a WAV file using Whisper."""
     try:
-        from backend.services.transcription import transcribe_audio
-        # transcribe_audio expects a URL, but we have a local file
-        # Use OpenAI Whisper directly for local files
+        import os as _os
+        file_size = _os.path.getsize(wav_path)
+        logger.info("ESP32 transcription: WAV file %s, size=%d bytes", wav_path, file_size)
+
         from openai import OpenAI
 
         client = OpenAI(api_key=settings.openai_api_key)
         with open(wav_path, "rb") as f:
+            # Read first 44 bytes to check WAV header
+            header = f.read(44)
+            logger.info("ESP32 WAV header: %s", header[:4])
+            logger.info("ESP32 WAV channels=%d, sample_rate=%d, bits=%d",
+                       struct.unpack("<H", header[22:24])[0],
+                       struct.unpack("<I", header[24:28])[0],
+                       struct.unpack("<H", header[34:36])[0])
+            f.seek(0)
+
             response = client.audio.transcriptions.create(
                 model="whisper-1",
                 file=f,
-                language="es",  # Primary language
+                language="es",
             )
-        return response.text.strip()
-    except Exception:
+        result = response.text.strip()
+        logger.info("ESP32 transcription result: '%s'", result[:200] if result else "(empty)")
+        return result
+    except Exception as e:
         logger.exception("ESP32 transcription failed")
+        # Store error for debugging
+        _transcribe_wav._last_error = str(e)
         return ""
+
+_transcribe_wav._last_error = ""
 
 
 @router.get("/ping")

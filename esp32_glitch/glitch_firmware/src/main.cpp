@@ -209,16 +209,16 @@ void i2s_install_rx() {
 }
 
 void i2s_install_tx() {
-    // I2S config for speaker output (ES8311)
+    // I2S config for speaker output (ES8311) — stereo format
     i2s_config_t i2s_config = {
         .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
         .sample_rate = SAMPLE_RATE,
         .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
-        .channel_format = I2S_CHANNEL_FMT_ALL_LEFT,
+        .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
         .communication_format = I2S_COMM_FORMAT_STAND_I2S,
         .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
         .dma_buf_count = 8,
-        .dma_buf_len = 64,
+        .dma_buf_len = 256,
         .use_apll = false,
         .tx_desc_auto_clear = true,
         .fixed_mclk = 0,
@@ -257,7 +257,7 @@ void setup_microphone() {
     es7210_adc_config_i2s(cfg.codec_mode, &cfg.i2s_iface);
     es7210_adc_set_gain(
         (es7210_input_mics_t)(ES7210_INPUT_MIC1 | ES7210_INPUT_MIC2),
-        (es7210_gain_value_t)GAIN_0DB
+        (es7210_gain_value_t)GAIN_37_5DB
     );
     es7210_adc_set_gain(
         (es7210_input_mics_t)(ES7210_INPUT_MIC3 | ES7210_INPUT_MIC4),
@@ -279,6 +279,23 @@ void setup_speaker() {
         Serial.println("[GLITCH] Speaker ready");
     } else {
         Serial.println("[GLITCH] Speaker init failed — continuing without audio output");
+    }
+}
+
+// ==================== I2S WRITE HELPER ====================
+// Write mono samples as stereo (duplicate L→R) for ES8311
+void i2s_write_mono_as_stereo(const int16_t* mono, int num_samples) {
+    int16_t stereo[512];  // 256 stereo pairs
+    size_t bytes_written;
+    int offset = 0;
+    while (offset < num_samples) {
+        int chunk = min(256, num_samples - offset);
+        for (int i = 0; i < chunk; i++) {
+            stereo[i * 2]     = mono[offset + i];  // Left
+            stereo[i * 2 + 1] = mono[offset + i];  // Right
+        }
+        i2s_write(I2S_CH, (char*)stereo, chunk * 2 * sizeof(int16_t), &bytes_written, portMAX_DELAY);
+        offset += chunk;
     }
 }
 
@@ -311,9 +328,8 @@ void play_beep(int freq_hz, int duration_ms) {
     while (samples_written < total_samples) {
         int to_write = min(chunk_size, total_samples - samples_written);
         for (int i = 0; i < to_write; i++) {
-            // Sine wave with soft envelope (fade in/out)
             float env = 1.0f;
-            int fade_samples = SAMPLE_RATE / 20;  // 50ms fade
+            int fade_samples = SAMPLE_RATE / 20;
             if (samples_written + i < fade_samples) {
                 env = (float)(samples_written + i) / fade_samples;
             } else if (total_samples - (samples_written + i) < fade_samples) {
@@ -323,13 +339,13 @@ void play_beep(int freq_hz, int duration_ms) {
             phase += phase_inc;
             if (phase >= 2.0f * PI) phase -= 2.0f * PI;
         }
-        i2s_write(I2S_CH, (char*)buf, to_write * sizeof(int16_t), &bytes_written, portMAX_DELAY);
+        i2s_write_mono_as_stereo(buf, to_write);
         samples_written += to_write;
     }
 
     // Flush with silence
     memset(buf, 0, chunk_size * sizeof(int16_t));
-    i2s_write(I2S_CH, (char*)buf, chunk_size * sizeof(int16_t), &bytes_written, portMAX_DELAY);
+    i2s_write_mono_as_stereo(buf, chunk_size);
 
     free(buf);
 
@@ -368,7 +384,7 @@ void play_glitch_beep() {
             int to_write = min(chunk_size, total_samples - samples_written);
             for (int i = 0; i < to_write; i++) {
                 float env = 1.0f;
-                int fade = SAMPLE_RATE / 50;  // 20ms fade
+                int fade = SAMPLE_RATE / 50;
                 if (samples_written + i < fade)
                     env = (float)(samples_written + i) / fade;
                 else if (total_samples - (samples_written + i) < fade)
@@ -377,24 +393,115 @@ void play_glitch_beep() {
                 phase += phase_inc;
                 if (phase >= 2.0f * PI) phase -= 2.0f * PI;
             }
-            i2s_write(I2S_CH, (char*)buf, to_write * sizeof(int16_t), &bytes_written, portMAX_DELAY);
+            i2s_write_mono_as_stereo(buf, to_write);
             samples_written += to_write;
         }
 
         // Small gap between tones
         if (t == 0) {
             memset(buf, 0, chunk_size * sizeof(int16_t));
-            i2s_write(I2S_CH, (char*)buf, chunk_size * sizeof(int16_t), &bytes_written, portMAX_DELAY);
+            i2s_write_mono_as_stereo(buf, chunk_size);
         }
     }
 
     // Flush silence
     memset(buf, 0, chunk_size * sizeof(int16_t));
-    i2s_write(I2S_CH, (char*)buf, chunk_size * sizeof(int16_t), &bytes_written, portMAX_DELAY);
+    i2s_write_mono_as_stereo(buf, chunk_size);
 
     free(buf);
 
     // Back to RX
+    i2s_driver_uninstall(I2S_CH);
+    i2s_install_rx();
+}
+
+// ==================== PLAY PCM FROM URL ====================
+void play_pcm_url(const char* url) {
+    if (!speaker_ready || strlen(url) == 0) return;
+
+    Serial.printf("[GLITCH] Downloading audio: %s\n", url);
+    show_status("Speaking...", CLR_PRIMARY);
+
+    // Download entire WAV file to PSRAM
+    HTTPClient http;
+    http.begin(url);
+    http.setTimeout(15000);
+    int httpCode = http.GET();
+
+    if (httpCode != 200) {
+        Serial.printf("[GLITCH] Audio download failed: %d\n", httpCode);
+        http.end();
+        return;
+    }
+
+    int contentLen = http.getSize();
+    Serial.printf("[GLITCH] Audio size: %d bytes\n", contentLen);
+
+    // Read entire response into PSRAM
+    int buf_size = (contentLen > 0) ? contentLen : 512000;  // Max ~500KB
+    uint8_t* wav_data = (uint8_t*)ps_malloc(buf_size);
+    if (!wav_data) {
+        Serial.println("[GLITCH] Play: PSRAM alloc failed");
+        http.end();
+        return;
+    }
+
+    WiFiClient* stream = http.getStreamPtr();
+    int total_read = 0;
+    unsigned long timeout_start = millis();
+
+    while ((stream->connected() || stream->available()) && total_read < buf_size) {
+        int avail = stream->available();
+        if (avail > 0) {
+            int to_read = min(avail, buf_size - total_read);
+            int got = stream->readBytes(wav_data + total_read, to_read);
+            total_read += got;
+            timeout_start = millis();
+        } else {
+            delay(1);
+            if (millis() - timeout_start > 3000) break;
+        }
+    }
+    http.end();
+
+    Serial.printf("[GLITCH] Downloaded %d bytes to PSRAM\n", total_read);
+
+    if (total_read < 100) {
+        Serial.println("[GLITCH] Audio too small, skipping playback");
+        free(wav_data);
+        return;
+    }
+
+    // Skip WAV header (44 bytes) — PCM data starts after
+    int pcm_offset = 44;
+    int pcm_len = total_read - pcm_offset;
+    int16_t* pcm_data = (int16_t*)(wav_data + pcm_offset);
+    int pcm_samples = pcm_len / sizeof(int16_t);
+
+    Serial.printf("[GLITCH] PCM: %d samples, %d bytes (%.1f seconds)\n",
+                  pcm_samples, pcm_len, (float)pcm_samples / SAMPLE_RATE);
+
+    // Switch I2S to TX for playback
+    i2s_driver_uninstall(I2S_CH);
+    i2s_install_tx();
+
+    // Play PCM data as stereo (mono → duplicate L/R)
+    int played = 0;
+    while (played < pcm_samples) {
+        int to_play = min(256, pcm_samples - played);
+        i2s_write_mono_as_stereo(pcm_data + played, to_play);
+        played += to_play;
+    }
+
+    // Flush with silence
+    int16_t silence[256] = {0};
+    i2s_write_mono_as_stereo(silence, 256);
+
+    free(wav_data);
+
+    Serial.printf("[GLITCH] Played %d samples of audio\n", played);
+
+    // Switch back to RX
     i2s_driver_uninstall(I2S_CH);
     i2s_install_rx();
 }
@@ -439,8 +546,42 @@ void record_and_send() {
         offset += bytes_read / sizeof(int16_t);
     }
 
-    Serial.printf("[GLITCH] Recorded %d samples (%d bytes)\n", offset, offset * 2);
+    Serial.printf("[GLITCH] Recorded %d raw samples (%d bytes, 2-ch TDM)\n", offset, offset * 2);
     recording = false;
+
+    // Audio diagnostics — check if mic is capturing real signal
+    int16_t min_val = 32767, max_val = -32768;
+    int64_t sum = 0;
+    int nonzero = 0;
+    for (int i = 0; i < offset; i++) {
+        int16_t s = audio_buffer[i];
+        if (s < min_val) min_val = s;
+        if (s > max_val) max_val = s;
+        sum += abs(s);
+        if (s != 0) nonzero++;
+    }
+    int avg = (offset > 0) ? (int)(sum / offset) : 0;
+    Serial.printf("[GLITCH] Audio stats (raw): min=%d max=%d avg=%d nonzero=%d/%d\n",
+                  min_val, max_val, avg, nonzero, offset);
+
+    // Check CH0 vs CH1 to find which has voice data
+    int64_t sum_ch0 = 0, sum_ch1 = 0;
+    for (int i = 0; i < offset - 1; i += 2) {
+        sum_ch0 += abs(audio_buffer[i]);
+        sum_ch1 += abs(audio_buffer[i + 1]);
+    }
+    int half = offset / 2;
+    Serial.printf("[GLITCH] CH0 avg=%d, CH1 avg=%d\n",
+                  half > 0 ? (int)(sum_ch0 / half) : 0,
+                  half > 0 ? (int)(sum_ch1 / half) : 0);
+
+    // Extract mono from interleaved TDM data (keep CH0, skip CH1)
+    int mono_samples = offset / 2;
+    for (int i = 0; i < mono_samples; i++) {
+        audio_buffer[i] = audio_buffer[i * 2];  // Keep every other sample (CH0)
+    }
+    offset = mono_samples;
+    Serial.printf("[GLITCH] Extracted mono: %d samples (%d bytes)\n", offset, offset * 2);
 
     // Recording end beep
     play_beep(880, 100);
@@ -474,20 +615,27 @@ void record_and_send() {
             const char* transcript = doc["transcript"] | "";
             const char* reply = doc["response"] | "";
             const char* audio_url = doc["audio_url"] | "";
+            const char* pcm_url = doc["pcm_url"] | "";
 
             Serial.println("=== GLITCH RESPONSE ===");
             Serial.printf("  Status:     %s\n", status);
             Serial.printf("  You said:   %s\n", transcript);
             Serial.printf("  Glitch:     %s\n", reply);
-            if (strlen(audio_url) > 0) {
-                Serial.printf("  Audio URL:  %s\n", audio_url);
+            if (strlen(pcm_url) > 0) {
+                Serial.printf("  PCM URL:    %s\n", pcm_url);
             }
             Serial.println("=======================");
 
             // Success feedback
             if (strcmp(status, "success") == 0) {
                 show_response(transcript, reply);
-                play_glitch_beep();  // Happy chirp
+
+                // Play TTS audio if available, otherwise just beep
+                if (strlen(pcm_url) > 0) {
+                    play_pcm_url(pcm_url);
+                } else {
+                    play_glitch_beep();
+                }
             } else {
                 show_status("Error", CLR_ERROR);
                 play_beep(330, 300);  // Error tone
@@ -507,6 +655,10 @@ void record_and_send() {
 
     http.end();
     free(audio_buffer);
+
+    // Show result for a few seconds, then return to Ready
+    delay(5000);
+    show_status("Ready", CLR_PRIMARY);
 
     Serial.println("[GLITCH] Ready for next command");
 }
