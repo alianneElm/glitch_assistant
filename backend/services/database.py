@@ -89,6 +89,19 @@ def init_db():
 
     Base.metadata.create_all(bind=engine)
 
+    # Add esp32_sent column to reminders if missing (for ESP32 audio notifications)
+    try:
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            conn.execute(text(
+                "ALTER TABLE reminders ADD COLUMN IF NOT EXISTS "
+                "esp32_sent BOOLEAN NOT NULL DEFAULT false"
+            ))
+            conn.commit()
+        logger.info("reminders.esp32_sent column verified")
+    except Exception:
+        logger.debug("esp32_sent column migration skipped (may already exist)")
+
     # Create HNSW index for fast similarity search (if not exists)
     try:
         from sqlalchemy import text

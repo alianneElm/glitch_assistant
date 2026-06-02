@@ -190,6 +190,77 @@ async def _transcribe_wav(wav_path: str) -> str:
 _transcribe_wav._last_error = ""
 
 
+@router.get("/reminders")
+async def esp32_reminders(
+    x_user_id: str = Header(default="+46762547179"),
+):
+    """Return due reminders for ESP32 playback.
+
+    ESP32 polls this every ~30 seconds. Returns the first due reminder
+    with TTS audio, and marks it as sent so it won't repeat.
+    """
+    try:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        from backend.models.reminder import Reminder as ReminderModel
+        from backend.services.database import get_session
+
+        now = datetime.now(ZoneInfo(settings.user_timezone))
+        session = get_session()
+        try:
+            # Find first due reminder not yet delivered to ESP32
+            reminder = (
+                session.query(ReminderModel)
+                .filter(ReminderModel.esp32_sent == False)
+                .filter(ReminderModel.remind_at <= now)
+                .filter(ReminderModel.user_whatsapp.in_([
+                    x_user_id,
+                    f"whatsapp:{x_user_id}",
+                    settings.my_whatsapp_number,
+                ]))
+                .order_by(ReminderModel.remind_at)
+                .first()
+            )
+
+            if not reminder:
+                return JSONResponse(content={"status": "none"})
+
+            # Mark ESP32 delivery (WhatsApp delivery is independent)
+            reminder.esp32_sent = True
+            session.commit()
+
+            text = reminder.reminder_text
+            # Strip [MSG] prefix from scheduled messages
+            if text.startswith("[MSG] "):
+                text = text[6:]
+
+            logger.info("ESP32 reminder delivery: '%s' (job_id=%s)", text[:80], reminder.job_id)
+
+            # Generate TTS audio for the reminder
+            pcm_url = ""
+            try:
+                from backend.services.voice import generate_voice_pcm
+                pcm_path = generate_voice_pcm(f"Recordatorio: {text}")
+                if pcm_path:
+                    pcm_filename = os.path.basename(pcm_path)
+                    pcm_url = f"https://{_BASE_URL}/audio/{pcm_filename}"
+            except Exception:
+                logger.exception("Failed to generate TTS for reminder")
+
+            return JSONResponse(content={
+                "status": "reminder",
+                "text": text,
+                "pcm_url": pcm_url,
+            })
+
+        finally:
+            session.close()
+
+    except Exception:
+        logger.exception("ESP32 reminders check failed")
+        return JSONResponse(content={"status": "error"})
+
+
 @router.get("/ping")
 async def esp32_ping():
     """Health check for ESP32 devices."""

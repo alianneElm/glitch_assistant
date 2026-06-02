@@ -1,14 +1,17 @@
 /**
- * Glitch ESP32 Firmware — Phase 4
+ * Glitch ESP32 Firmware — Phase 5 (Face Edition)
  *
  * Waveshare ESP32-S3-Touch-AMOLED-1.75C
- * Press button → record audio → send to Glitch backend → play beep → show response
+ * Press button → record audio → send to Glitch backend → play TTS → show response
+ * Full-screen cyberpunk face with animated state overlays.
  *
  * Hardware:
  *   - ES7210: 4-channel ADC (microphone input)
  *   - ES8311: DAC (speaker output)
  *   - PA (GPIO 46): Power amplifier enable
  *   - I2S bus shared: BCK=9, WS=45, MCLK=16, DIN=10, DOUT=8
+ *   - CO5300: 466x466 AMOLED (QSPI)
+ *   - AXP2101: PMU (battery + charging management)
  */
 
 #include <Arduino.h>
@@ -22,19 +25,35 @@
 #include "es7210.h"
 #include "audio_hal.h"
 #include "es8311_speaker.h"
+#include "glitch_face.h"
+
+#define XPOWERS_CHIP_AXP2101
+#include "XPowersLib.h"
 
 // ==================== CONFIG ====================
-const char* WIFI_SSID     = "TP-Link_D9F7";
-const char* WIFI_PASSWORD = "42209317";
-const char* GLITCH_URL    = "https://alluring-courtesy-production-9b65.up.railway.app";
-const char* USER_ID       = "+46762547179";
+const char* GLITCH_URL = "https://alluring-courtesy-production-9b65.up.railway.app";
+const char* USER_ID    = "+46762547179";
+
+// Known WiFi networks — tried in order, first found wins
+struct WifiNetwork { const char* ssid; const char* password; };
+static const WifiNetwork WIFI_NETWORKS[] = {
+    { "TP-Link_D9F7", "42209317"    },  // Home
+    { "iPhone de Alianne", "angelica2010" },  // Mobile hotspot
+};
+static const int WIFI_NETWORK_COUNT = sizeof(WIFI_NETWORKS) / sizeof(WIFI_NETWORKS[0]);
 
 // Audio settings
 #define SAMPLE_RATE     16000
-#define RECORD_SECONDS  5
+#define RECORD_SECONDS  10
 #define I2S_CH          I2S_NUM_1
 #define BUFFER_SIZE     1024
 #define SPEAKER_VOLUME  85
+
+// Voice Activity Detection (VAD) — stop recording on silence
+#define VAD_MIN_RECORD_MS   2000   // Minimum recording time before VAD kicks in
+#define VAD_SILENCE_MS      1500   // Stop after this much silence
+#define VAD_THRESHOLD       200    // Amplitude threshold for "speech" (raw TDM avg ~370 during speech)
+#define VAD_WINDOW_SAMPLES  1600   // ~100ms window for energy calculation
 
 // Button
 #define BUTTON_PIN      0  // Small button (BOOT)
@@ -45,22 +64,28 @@ Arduino_DataBus *bus = new Arduino_ESP32QSPI(
 Arduino_CO5300 *gfx = new Arduino_CO5300(
     bus, LCD_RESET, 0 /* rotation */, LCD_WIDTH, LCD_HEIGHT, 6, 0, 0, 0);
 
-// Colors (RGB565)
-#define CLR_BG        0x0000  // Black
-#define CLR_PRIMARY   0x07FF  // Cyan
-#define CLR_SUCCESS   0x07E0  // Green
-#define CLR_ERROR     0xF800  // Red
-#define CLR_WARNING   0xFD20  // Orange
-#define CLR_TEXT      0xFFFF  // White
-#define CLR_DIM       0x7BEF  // Gray
-
 // ==================== GLOBALS ====================
 bool recording = false;
 bool wifi_connected = false;
 bool speaker_ready = false;
 bool display_ready = false;
 
-// ==================== DISPLAY HELPERS ====================
+// PMU (battery management)
+XPowersPMU PMU;
+bool pmu_ready = false;
+unsigned long last_battery_update = 0;
+#define BATTERY_UPDATE_MS 5000  // Update battery every 5 seconds
+
+// (removed last_charge_percent — using voltage/charger-state approach instead)
+
+unsigned long last_wifi_retry = 0;
+#define WIFI_RETRY_MS 30000  // Retry WiFi every 30 seconds when disconnected
+
+// Reminder polling
+unsigned long last_reminder_check = 0;
+#define REMINDER_CHECK_MS 30000  // Check for reminders every 30 seconds
+
+// ==================== DISPLAY ====================
 
 void setup_display() {
     Serial.println("[GLITCH] Initializing AMOLED display...");
@@ -69,109 +94,217 @@ void setup_display() {
         return;
     }
     display_ready = true;
-    gfx->fillScreen(CLR_BG);
-    gfx->setBrightness(180);
+    gfx->fillScreen(0x0000);
+    gfx->setBrightness(200);
     Serial.println("[GLITCH] Display ready (466x466 AMOLED)");
+
+    // Initialize face system
+    face_init(gfx);
+    face_set_state(STATE_BOOT);
 }
 
-// Draw centered text at y position
-void draw_centered(const char* text, int y, uint16_t color, int size) {
-    if (!display_ready) return;
-    gfx->setTextSize(size);
-    gfx->setTextColor(color, CLR_BG);
-    int16_t x1, y1;
-    uint16_t w, h;
-    gfx->getTextBounds(text, 0, 0, &x1, &y1, &w, &h);
-    gfx->setCursor((LCD_WIDTH - w) / 2, y);
-    gfx->print(text);
+// ==================== PMU (AXP2101) ====================
+
+// Read battery voltage directly from AXP2101 ADC result registers 0x34+0x35.
+// getBattVoltage() calls isBatteryConnect() which reads STATUS1 — broken on this board.
+// Format: ((reg0x34 & 0x1F) << 8) | reg0x35, 1 mV per LSB.
+int read_raw_battery_voltage_mv() {
+    Wire.beginTransmission((uint8_t)0x34);
+    Wire.write((uint8_t)0x34);
+    Wire.endTransmission(false);
+    Wire.requestFrom((uint8_t)0x34, (uint8_t)2);
+    if (Wire.available() >= 2) {
+        uint8_t h = Wire.read();
+        uint8_t l = Wire.read();
+        return ((h & 0x1F) << 8) | l;
+    }
+    return -1;
 }
 
-// Draw a filled circle (Glitch "eye") at center
-void draw_eye(uint16_t color, int radius) {
-    if (!display_ready) return;
-    int cx = LCD_WIDTH / 2;
-    int cy = LCD_HEIGHT / 2 - 30;
-    gfx->fillCircle(cx, cy, radius, color);
-    // Inner dark circle for pupil
-    gfx->fillCircle(cx, cy, radius / 3, CLR_BG);
+// Read battery SOC from register 0xA4 — also bypasses isBatteryConnect().
+// Returns 0-100, or -1 on read error. Note: AXP2101 may report 0 when
+// battery detection is broken; use only to confirm, not as sole source.
+int read_raw_battery_percent() {
+    Wire.beginTransmission((uint8_t)0x34);
+    Wire.write((uint8_t)0xA4);
+    Wire.endTransmission(false);
+    Wire.requestFrom((uint8_t)0x34, (uint8_t)1);
+    if (Wire.available()) {
+        return Wire.read();
+    }
+    return -1;
 }
 
-// Show status screen
-void show_status(const char* status, uint16_t color) {
-    if (!display_ready) return;
-    gfx->fillScreen(CLR_BG);
+void setup_pmu() {
+    Serial.println("[GLITCH] Initializing AXP2101 PMU...");
 
-    // Draw Glitch eye
-    draw_eye(color, 60);
+    if (PMU.begin(Wire, AXP2101_SLAVE_ADDRESS, IIC_SDA, IIC_SCL)) {
+        pmu_ready = true;
+        Serial.println("[GLITCH] PMU initialized");
 
-    // Status text below eye
-    draw_centered(status, LCD_HEIGHT / 2 + 60, color, 3);
+        // Enable battery detection — needed for charging and battery power!
+        PMU.enableBattDetection();
 
-    // WiFi indicator at bottom
-    if (wifi_connected) {
-        draw_centered("WiFi OK", LCD_HEIGHT - 60, CLR_SUCCESS, 2);
+        // Disable TS pin — no thermistor on this board.
+        // Without this, charger reports "abnormal" and won't charge.
+        PMU.disableTSPinMeasure();
+
+        // Charge settings: 400mA constant current, 4.2V target
+        PMU.setChargerConstantCurr(XPOWERS_AXP2101_CHG_CUR_400MA);
+        PMU.setChargeTargetVoltage(XPOWERS_AXP2101_CHG_VOL_4V2);
+
+        // Enable ADC measurements
+        PMU.enableBattVoltageMeasure();
+        PMU.enableVbusVoltageMeasure();
+        PMU.enableSystemVoltageMeasure();
+
+        // Wait for ADC to settle
+        delay(300);
+
+        // Detailed PMU diagnostic at boot
+        int sys_v = PMU.getSystemVoltage();
+        int vbus_v = PMU.getVbusVoltage();
+        bool usb = PMU.isVbusIn();
+        bool batt_det = PMU.isBatteryConnect();
+        uint8_t cs = PMU.getChargerStatus();
+        int raw_batt_v = read_raw_battery_voltage_mv();
+
+        Serial.println("[PMU] === Battery Diagnostic ===");
+        Serial.printf("[PMU]   System voltage:  %d mV\n", sys_v);
+        Serial.printf("[PMU]   VBUS voltage:    %d mV\n", vbus_v);
+        Serial.printf("[PMU]   Raw BATT ADC:    %d mV\n", raw_batt_v);
+        Serial.printf("[PMU]   USB connected:   %s\n", usb ? "YES" : "NO");
+        Serial.printf("[PMU]   Battery detect:  %s\n", batt_det ? "YES" : "NO");
+        Serial.printf("[PMU]   Charger state:   %d (%s)\n", cs,
+                      cs==0?"trickle":cs==1?"pre":cs==2?"CC":cs==3?"CV":cs==4?"done":"idle");
+
+        // Raw register dump for debugging
+        Wire.beginTransmission(0x34);
+        Wire.write(0x00);  // STATUS1
+        Wire.endTransmission(false);
+        Wire.requestFrom((uint8_t)0x34, (uint8_t)3);
+        if (Wire.available() >= 3) {
+            uint8_t s1 = Wire.read();
+            uint8_t s2 = Wire.read();
+            uint8_t s3 = Wire.read();
+            Serial.printf("[PMU]   STATUS1=0x%02X STATUS2=0x%02X STATUS3=0x%02X\n", s1, s2, s3);
+            Serial.printf("[PMU]   STATUS1 bits: VBUS_in=%d BattPresent=%d\n",
+                          (s1>>5)&1, (s1>>3)&1);
+        }
+        Serial.println("[PMU] =============================");
     } else {
-        draw_centered("No WiFi", LCD_HEIGHT - 60, CLR_ERROR, 2);
+        Serial.println("[GLITCH] PMU init failed — battery monitoring disabled");
     }
 }
 
-// Show Glitch response text (word-wrapped)
-void show_response(const char* transcript, const char* reply) {
-    if (!display_ready) return;
-    gfx->fillScreen(CLR_BG);
+void update_battery() {
+    if (!pmu_ready) return;
 
-    // "You said:" header
-    draw_centered("Tu:", 30, CLR_DIM, 2);
+    unsigned long now = millis();
+    if (now - last_battery_update < BATTERY_UPDATE_MS) return;
+    last_battery_update = now;
 
-    // Transcript (truncated if needed)
-    gfx->setTextSize(2);
-    gfx->setTextColor(CLR_TEXT, CLR_BG);
-    gfx->setTextWrap(true);
-    gfx->setCursor(20, 60);
-    // Truncate to fit screen
-    char trunc[120];
-    strncpy(trunc, transcript, sizeof(trunc) - 1);
-    trunc[sizeof(trunc) - 1] = '\0';
-    gfx->print(trunc);
+    BatteryInfo info;
+    info.usb_in = PMU.isVbusIn();
+    info.charge_state = PMU.getChargerStatus();
 
-    // Divider line
-    gfx->drawFastHLine(40, LCD_HEIGHT / 2 - 30, LCD_WIDTH - 80, CLR_PRIMARY);
+    // Use system voltage — most reliable on this board.
+    // getBattVoltage() depends on isBatteryConnect() which is broken.
+    info.voltage_mv = PMU.getSystemVoltage();
 
-    // "Glitch:" header
-    gfx->setTextSize(2);
-    gfx->setTextColor(CLR_PRIMARY, CLR_BG);
-    gfx->setCursor(20, LCD_HEIGHT / 2 - 10);
-    gfx->print("Glitch:");
+    // Charging: USB connected + charger in active state (trickle/pre/CC/CV)
+    info.charging = info.usb_in && (info.charge_state < 4);
 
-    // Reply text
-    gfx->setTextSize(2);
-    gfx->setTextColor(CLR_TEXT, CLR_BG);
-    gfx->setCursor(20, LCD_HEIGHT / 2 + 20);
-    char reply_trunc[200];
-    strncpy(reply_trunc, reply, sizeof(reply_trunc) - 1);
-    reply_trunc[sizeof(reply_trunc) - 1] = '\0';
-    gfx->print(reply_trunc);
+    // Estimate percent from system voltage using LiPo discharge curve.
+    // On this board, getSystemVoltage() returns battery-level voltage (~3.7V)
+    // even when USB is connected, so we can always use it.
+    int v = info.voltage_mv;
+
+    if (v >= 4150) {
+        info.percent = 95 + (v - 4150) * 5 / 50;
+    } else if (v >= 3900) {
+        info.percent = 70 + (v - 3900) * 25 / 250;
+    } else if (v >= 3700) {
+        info.percent = 40 + (v - 3700) * 30 / 200;
+    } else if (v >= 3500) {
+        info.percent = 15 + (v - 3500) * 25 / 200;
+    } else if (v >= 3200) {
+        info.percent = (v - 3200) * 15 / 300;
+    } else if (v > 2800) {
+        info.percent = 0;
+    } else {
+        info.percent = -1;  // No battery detected
+    }
+    if (info.percent >= 0) info.percent = constrain(info.percent, 0, 100);
+
+    Serial.printf("[BATT] sysV=%dmV usb=%s cs=%d pct=%d%%\n",
+                  v, info.usb_in ? "Y" : "N",
+                  info.charge_state, info.percent);
+    face_set_battery(info);
 }
 
 // ==================== WIFI ====================
-void setup_wifi() {
-    Serial.printf("[GLITCH] Connecting to WiFi: %s\n", WIFI_SSID);
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
-    int timeout = 0;
-    while (WiFi.status() != WL_CONNECTED && timeout < 20) {
+// Scan visible networks and return the index of the first known one, or -1.
+static int wifi_find_known_network() {
+    Serial.println("[WIFI] Scanning...");
+    int found = WiFi.scanNetworks(false, false, false, 300);
+    if (found <= 0) {
+        Serial.println("[WIFI] No networks found");
+        WiFi.scanDelete();
+        return -1;
+    }
+    for (int k = 0; k < WIFI_NETWORK_COUNT; k++) {
+        for (int i = 0; i < found; i++) {
+            if (WiFi.SSID(i) == WIFI_NETWORKS[k].ssid) {
+                Serial.printf("[WIFI] Found: %s (RSSI %d)\n",
+                              WIFI_NETWORKS[k].ssid, WiFi.RSSI(i));
+                WiFi.scanDelete();
+                return k;
+            }
+        }
+    }
+    WiFi.scanDelete();
+    return -1;
+}
+
+// Try to connect to one specific network. Returns true on success.
+static bool wifi_connect_to(int idx) {
+    Serial.printf("[WIFI] Connecting to %s...", WIFI_NETWORKS[idx].ssid);
+    WiFi.begin(WIFI_NETWORKS[idx].ssid, WIFI_NETWORKS[idx].password);
+    for (int t = 0; t < 20; t++) {
+        if (WiFi.status() == WL_CONNECTED) {
+            Serial.printf(" OK  IP: %s\n", WiFi.localIP().toString().c_str());
+            return true;
+        }
         delay(500);
         Serial.print(".");
-        timeout++;
     }
+    Serial.println(" timeout");
+    WiFi.disconnect(true);
+    return false;
+}
 
-    if (WiFi.status() == WL_CONNECTED) {
-        wifi_connected = true;
-        Serial.printf("\n[GLITCH] WiFi connected! IP: %s\n", WiFi.localIP().toString().c_str());
-    } else {
-        Serial.println("\n[GLITCH] WiFi timeout — continuing without network");
-        Serial.println("[GLITCH] Make sure your router uses 2.4 GHz (ESP32 doesn't support 5 GHz)");
+void setup_wifi() {
+    WiFi.mode(WIFI_STA);
+    int idx = wifi_find_known_network();
+    if (idx >= 0) {
+        wifi_connected = wifi_connect_to(idx);
+    }
+    if (!wifi_connected) {
+        Serial.println("[WIFI] No known network available — continuing offline");
+    }
+}
+
+// Try to reconnect: scan for any known network and connect to it.
+// Called from loop() when connection is lost.
+static void wifi_reconnect() {
+    WiFi.disconnect(true);
+    delay(200);
+    int idx = wifi_find_known_network();
+    if (idx >= 0) {
+        wifi_connected = wifi_connect_to(idx);
+        if (wifi_connected) face_set_wifi(true);
     }
 }
 
@@ -415,14 +548,17 @@ void play_glitch_beep() {
     i2s_install_rx();
 }
 
-// ==================== PLAY PCM FROM URL ====================
+// ==================== PLAY PCM FROM URL (STREAMING) ====================
 void play_pcm_url(const char* url) {
     if (!speaker_ready || strlen(url) == 0) return;
 
-    Serial.printf("[GLITCH] Downloading audio: %s\n", url);
-    show_status("Speaking...", CLR_PRIMARY);
+    unsigned long t_start = millis();
+    Serial.printf("[GLITCH] Streaming audio: %s\n", url);
+    face_set_state(STATE_SPEAKING);
 
-    // Download entire WAV file to PSRAM
+    // Ensure PA is enabled
+    digitalWrite(PA, HIGH);
+
     HTTPClient http;
     http.begin(url);
     http.setTimeout(15000);
@@ -437,95 +573,204 @@ void play_pcm_url(const char* url) {
     int contentLen = http.getSize();
     Serial.printf("[GLITCH] Audio size: %d bytes\n", contentLen);
 
-    // Read entire response into PSRAM
-    int buf_size = (contentLen > 0) ? contentLen : 512000;  // Max ~500KB
-    uint8_t* wav_data = (uint8_t*)ps_malloc(buf_size);
-    if (!wav_data) {
-        Serial.println("[GLITCH] Play: PSRAM alloc failed");
-        http.end();
-        return;
-    }
-
     WiFiClient* stream = http.getStreamPtr();
-    int total_read = 0;
-    unsigned long timeout_start = millis();
 
-    while ((stream->connected() || stream->available()) && total_read < buf_size) {
+    // Read WAV header first (44 bytes)
+    uint8_t wav_header[44];
+    int hdr_read = 0;
+    unsigned long timeout_start = millis();
+    while (hdr_read < 44 && (millis() - timeout_start) < 5000) {
         int avail = stream->available();
         if (avail > 0) {
-            int to_read = min(avail, buf_size - total_read);
-            int got = stream->readBytes(wav_data + total_read, to_read);
-            total_read += got;
+            int to_read = min(avail, 44 - hdr_read);
+            int got = stream->readBytes(wav_header + hdr_read, to_read);
+            hdr_read += got;
             timeout_start = millis();
         } else {
             delay(1);
-            if (millis() - timeout_start > 3000) break;
+        }
+    }
+
+    bool has_wav = (hdr_read >= 44 &&
+                    wav_header[0] == 'R' && wav_header[1] == 'I' &&
+                    wav_header[2] == 'F' && wav_header[3] == 'F');
+
+    int wav_sample_rate = SAMPLE_RATE;
+    int wav_channels = 1;
+    if (has_wav) {
+        wav_sample_rate = wav_header[24] | (wav_header[25] << 8) |
+                          (wav_header[26] << 16) | (wav_header[27] << 24);
+        wav_channels = wav_header[22] | (wav_header[23] << 8);
+        Serial.printf("[GLITCH] WAV: %d Hz, %d ch\n", wav_sample_rate, wav_channels);
+    }
+
+    // Switch I2S to TX with matching sample rate
+    i2s_driver_uninstall(I2S_CH);
+
+    i2s_config_t i2s_config = {
+        .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
+        .sample_rate = (uint32_t)wav_sample_rate,
+        .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
+        .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
+        .communication_format = I2S_COMM_FORMAT_STAND_I2S,
+        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
+        .dma_buf_count = 8,
+        .dma_buf_len = 256,
+        .use_apll = false,
+        .tx_desc_auto_clear = true,
+        .fixed_mclk = 0,
+        .mclk_multiple = I2S_MCLK_MULTIPLE_256,
+        .bits_per_chan = I2S_BITS_PER_CHAN_16BIT,
+    };
+
+    i2s_pin_config_t pin_config = {0};
+    pin_config.bck_io_num = PIN_ES7210_BCLK;
+    pin_config.ws_io_num = PIN_ES7210_LRCK;
+    pin_config.data_in_num = -1;
+    pin_config.data_out_num = PIN_ES8311_DOUT;
+    pin_config.mck_io_num = PIN_ES7210_MCLK;
+
+    i2s_driver_install(I2S_CH, &i2s_config, 0, NULL);
+    i2s_set_pin(I2S_CH, &pin_config);
+    i2s_zero_dma_buffer(I2S_CH);
+
+    unsigned long t_first_play = millis();
+    Serial.printf("[GLITCH] Time to first audio: %lu ms\n", t_first_play - t_start);
+
+    // Stream playback — read chunks and play immediately
+    int16_t read_buf[512];  // Read buffer
+    int total_played = 0;
+    int bytes_remaining = contentLen - (has_wav ? 44 : 0);
+
+    // If header wasn't WAV, play those 44 bytes as PCM
+    if (!has_wav && hdr_read > 0) {
+        int16_t* hdr_pcm = (int16_t*)wav_header;
+        int hdr_samples = hdr_read / sizeof(int16_t);
+        if (wav_channels == 1) {
+            i2s_write_mono_as_stereo(hdr_pcm, hdr_samples);
+        } else {
+            size_t bw;
+            i2s_write(I2S_CH, (char*)hdr_pcm, hdr_read, &bw, portMAX_DELAY);
+        }
+        total_played += hdr_samples;
+    }
+
+    timeout_start = millis();
+    while ((stream->connected() || stream->available()) && bytes_remaining > 0) {
+        int avail = stream->available();
+        if (avail > 0) {
+            int to_read = min(avail, (int)sizeof(read_buf));
+            to_read = min(to_read, bytes_remaining);
+            int got = stream->readBytes((uint8_t*)read_buf, to_read);
+            bytes_remaining -= got;
+
+            int samples = got / sizeof(int16_t);
+            if (wav_channels == 1) {
+                i2s_write_mono_as_stereo(read_buf, samples);
+            } else {
+                // Stereo — send directly
+                size_t bw;
+                i2s_write(I2S_CH, (char*)read_buf, got, &bw, portMAX_DELAY);
+            }
+            total_played += samples;
+            timeout_start = millis();
+        } else {
+            delay(1);
+            if (millis() - timeout_start > 5000) break;
         }
     }
     http.end();
 
-    Serial.printf("[GLITCH] Downloaded %d bytes to PSRAM\n", total_read);
-
-    if (total_read < 100) {
-        Serial.println("[GLITCH] Audio too small, skipping playback");
-        free(wav_data);
-        return;
-    }
-
-    // Skip WAV header (44 bytes) — PCM data starts after
-    int pcm_offset = 44;
-    int pcm_len = total_read - pcm_offset;
-    int16_t* pcm_data = (int16_t*)(wav_data + pcm_offset);
-    int pcm_samples = pcm_len / sizeof(int16_t);
-
-    Serial.printf("[GLITCH] PCM: %d samples, %d bytes (%.1f seconds)\n",
-                  pcm_samples, pcm_len, (float)pcm_samples / SAMPLE_RATE);
-
-    // Switch I2S to TX for playback
-    i2s_driver_uninstall(I2S_CH);
-    i2s_install_tx();
-
-    // Play PCM data as stereo (mono → duplicate L/R)
-    int played = 0;
-    while (played < pcm_samples) {
-        int to_play = min(256, pcm_samples - played);
-        i2s_write_mono_as_stereo(pcm_data + played, to_play);
-        played += to_play;
-    }
-
     // Flush with silence
     int16_t silence[256] = {0};
     i2s_write_mono_as_stereo(silence, 256);
+    delay(100);
 
-    free(wav_data);
+    unsigned long t_end = millis();
+    Serial.printf("[GLITCH] Streamed %d samples in %lu ms (first audio at +%lu ms)\n",
+                  total_played, t_end - t_start, t_first_play - t_start);
 
-    Serial.printf("[GLITCH] Played %d samples of audio\n", played);
-
-    // Switch back to RX
+    // Switch back to RX at original sample rate
     i2s_driver_uninstall(I2S_CH);
     i2s_install_rx();
+}
+
+// ==================== REMINDER POLLING ====================
+void check_reminders() {
+    if (!wifi_connected) return;
+
+    unsigned long now = millis();
+    if (now - last_reminder_check < REMINDER_CHECK_MS) return;
+    last_reminder_check = now;
+
+    HTTPClient http;
+    String url = String(GLITCH_URL) + "/esp32/reminders";
+    http.begin(url);
+    http.addHeader("X-User-ID", USER_ID);
+    http.setTimeout(10000);
+
+    int httpCode = http.GET();
+    if (httpCode != 200) {
+        http.end();
+        return;
+    }
+
+    String response = http.getString();
+    http.end();
+
+    // Parse JSON
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, response);
+    if (err) return;
+
+    const char* status = doc["status"] | "none";
+    if (strcmp(status, "reminder") != 0) return;
+
+    // We have a reminder!
+    const char* text = doc["text"] | "";
+    const char* pcm_url = doc["pcm_url"] | "";
+
+    Serial.printf("[REMINDER] %s\n", text);
+
+    // Show reminder on screen
+    face_show_response("Recordatorio:", text);
+
+    // Play notification sound
+    play_beep(880, 150);
+    delay(100);
+    play_beep(1100, 150);
+
+    // Play TTS audio if available
+    if (strlen(pcm_url) > 0) {
+        play_pcm_url(pcm_url);
+    }
+
+    // Show for a few seconds, then return to idle
+    delay(5000);
+    face_set_state(STATE_IDLE);
 }
 
 // ==================== RECORD + SEND ====================
 void record_and_send() {
     if (!wifi_connected) {
         Serial.println("[GLITCH] No WiFi — cannot send audio");
-        show_status("No WiFi!", CLR_ERROR);
-        play_beep(200, 500);  // Low error tone
+        face_set_state(STATE_ERROR);
+        play_beep(200, 500);
         delay(2000);
-        show_status("Ready", CLR_PRIMARY);
+        face_set_state(STATE_IDLE);
         return;
     }
 
     // Recording start beep
-    show_status("Listening...", CLR_SUCCESS);
+    face_set_state(STATE_LISTENING);
     play_beep(660, 100);
 
     Serial.println("[GLITCH] Recording...");
     recording = true;
 
     // Allocate buffer in PSRAM for audio data
-    int total_samples = SAMPLE_RATE * RECORD_SECONDS;
+    // TDM gives 2 interleaved channels, so we need 2x the samples
+    int total_samples = SAMPLE_RATE * RECORD_SECONDS * 2;
     int total_bytes = total_samples * sizeof(int16_t);
     int16_t* audio_buffer = (int16_t*)ps_malloc(total_bytes);
 
@@ -535,18 +780,43 @@ void record_and_send() {
         return;
     }
 
-    // Record audio
+    // Record audio with VAD (Voice Activity Detection)
     int offset = 0;
     size_t bytes_read;
     unsigned long start_time = millis();
+    unsigned long last_voice_time = millis();  // Last time speech was detected
+    bool vad_stopped = false;
 
     while (offset < total_samples && (millis() - start_time) < (RECORD_SECONDS * 1000 + 500)) {
         int to_read = min(BUFFER_SIZE, total_samples - offset);
         i2s_read(I2S_CH, (char*)(audio_buffer + offset), to_read * sizeof(int16_t), &bytes_read, portMAX_DELAY);
-        offset += bytes_read / sizeof(int16_t);
+        int samples_got = bytes_read / sizeof(int16_t);
+
+        // Calculate energy of this chunk for VAD
+        int64_t energy = 0;
+        for (int i = 0; i < samples_got; i++) {
+            energy += abs(audio_buffer[offset + i]);
+        }
+        int avg_energy = (samples_got > 0) ? (int)(energy / samples_got) : 0;
+
+        if (avg_energy > VAD_THRESHOLD) {
+            last_voice_time = millis();
+        }
+
+        offset += samples_got;
+
+        // Check VAD: if past minimum time and silence detected for VAD_SILENCE_MS
+        unsigned long elapsed = millis() - start_time;
+        if (elapsed > VAD_MIN_RECORD_MS && (millis() - last_voice_time) > VAD_SILENCE_MS) {
+            vad_stopped = true;
+            Serial.printf("[GLITCH] VAD: silence detected, stopping after %lu ms\n", elapsed);
+            break;
+        }
     }
 
-    Serial.printf("[GLITCH] Recorded %d raw samples (%d bytes, 2-ch TDM)\n", offset, offset * 2);
+    unsigned long record_time = millis() - start_time;
+    Serial.printf("[GLITCH] Recorded %d raw samples (%d bytes, 2-ch TDM) in %lu ms%s\n",
+                  offset, offset * 2, record_time, vad_stopped ? " (VAD)" : "");
     recording = false;
 
     // Audio diagnostics — check if mic is capturing real signal
@@ -587,7 +857,7 @@ void record_and_send() {
     play_beep(880, 100);
 
     // Send to backend
-    show_status("Thinking...", CLR_PRIMARY);
+    face_set_state(STATE_THINKING);
     Serial.println("[GLITCH] Sending to backend...");
 
     HTTPClient http;
@@ -621,24 +891,25 @@ void record_and_send() {
             Serial.printf("  Status:     %s\n", status);
             Serial.printf("  You said:   %s\n", transcript);
             Serial.printf("  Glitch:     %s\n", reply);
-            if (strlen(pcm_url) > 0) {
-                Serial.printf("  PCM URL:    %s\n", pcm_url);
-            }
+            Serial.printf("  audio_url:  '%s'\n", audio_url);
+            Serial.printf("  pcm_url:    '%s'\n", pcm_url);
+            Serial.printf("  pcm_url len: %d\n", strlen(pcm_url));
             Serial.println("=======================");
 
             // Success feedback
             if (strcmp(status, "success") == 0) {
-                show_response(transcript, reply);
+                face_show_response(transcript, reply);
 
                 // Play TTS audio if available, otherwise just beep
                 if (strlen(pcm_url) > 0) {
+                    face_set_state(STATE_SPEAKING);
                     play_pcm_url(pcm_url);
                 } else {
                     play_glitch_beep();
                 }
             } else {
-                show_status("Error", CLR_ERROR);
-                play_beep(330, 300);  // Error tone
+                face_set_state(STATE_ERROR);
+                play_beep(330, 300);
             }
         } else {
             Serial.printf("[GLITCH] JSON parse error: %s\n", err.c_str());
@@ -649,16 +920,16 @@ void record_and_send() {
         if (httpCode > 0) {
             Serial.printf("[GLITCH] Response: %s\n", http.getString().c_str());
         }
-        show_status("Error", CLR_ERROR);
-        play_beep(220, 500);  // Low error tone
+        face_set_state(STATE_ERROR);
+        play_beep(220, 500);
     }
 
     http.end();
     free(audio_buffer);
 
-    // Show result for a few seconds, then return to Ready
+    // Show result for a few seconds, then return to idle face
     delay(5000);
-    show_status("Ready", CLR_PRIMARY);
+    face_set_state(STATE_IDLE);
 
     Serial.println("[GLITCH] Ready for next command");
 }
@@ -669,7 +940,7 @@ void setup() {
     delay(1000);
 
     Serial.println("========================================");
-    Serial.println("  Glitch ESP32 — Phase 4");
+    Serial.println("  Glitch ESP32 — Phase 5 (Face)");
     Serial.println("  Waveshare ESP32-S3-AMOLED-1.75C");
     Serial.println("========================================");
     Serial.printf("PSRAM: %d KB\n", ESP.getPsramSize() / 1024);
@@ -688,15 +959,14 @@ void setup() {
 
     // Initialize display first (visual feedback during boot)
     setup_display();
-    show_status("Booting...", CLR_PRIMARY);
+    // face_init + STATE_BOOT done inside setup_display()
 
     // Connect WiFi
     setup_wifi();
-    if (wifi_connected) {
-        show_status("WiFi OK", CLR_SUCCESS);
-    } else {
-        show_status("No WiFi", CLR_WARNING);
-    }
+    face_set_wifi(wifi_connected);
+
+    // Initialize PMU (battery monitoring)
+    setup_pmu();
 
     // Initialize audio codecs
     setup_microphone();
@@ -705,8 +975,11 @@ void setup() {
     // Boot chime
     play_glitch_beep();
 
-    // Show ready screen
-    show_status("Ready", CLR_PRIMARY);
+    // Initial battery read
+    update_battery();
+
+    // Transition to idle — face with animated overlays
+    face_set_state(STATE_IDLE);
 
     Serial.println("\n[GLITCH] Ready! Press button to talk.");
 }
@@ -714,14 +987,30 @@ void setup() {
 // ==================== LOOP ====================
 void loop() {
     // Reconnect WiFi if disconnected
-    if (!wifi_connected && WiFi.status() == WL_CONNECTED) {
-        wifi_connected = true;
-        Serial.println("[GLITCH] WiFi reconnected!");
-        play_glitch_beep();
-    } else if (wifi_connected && WiFi.status() != WL_CONNECTED) {
+    // WiFi state tracking + auto-reconnect to any known network
+    if (wifi_connected && WiFi.status() != WL_CONNECTED) {
         wifi_connected = false;
-        Serial.println("[GLITCH] WiFi lost!");
+        face_set_wifi(false);
+        Serial.println("[WIFI] Connection lost");
+        last_wifi_retry = millis();  // retry soon
     }
+    if (!wifi_connected) {
+        unsigned long now = millis();
+        if (now - last_wifi_retry >= WIFI_RETRY_MS) {
+            last_wifi_retry = now;
+            wifi_reconnect();
+            if (wifi_connected) play_glitch_beep();
+        }
+    }
+
+    // Update battery status periodically
+    update_battery();
+
+    // Check for due reminders (every 30s)
+    check_reminders();
+
+    // Drive face animations (non-blocking, ~20fps)
+    face_update();
 
     // Check button press (LOW = pressed)
     if (digitalRead(BUTTON_PIN) == LOW) {
@@ -738,5 +1027,5 @@ void loop() {
         }
     }
 
-    delay(50);
+    delay(10);  // Shorter delay for smoother animations
 }
