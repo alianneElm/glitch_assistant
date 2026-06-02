@@ -17,13 +17,14 @@
 #include <driver/i2s.h>
 #include <Wire.h>
 #include <ArduinoJson.h>
+#include "Arduino_GFX_Library.h"
 #include "pin_config.h"
 #include "es7210.h"
 #include "audio_hal.h"
 #include "es8311_speaker.h"
 
 // ==================== CONFIG ====================
-const char* WIFI_SSID     = "TP_LINK_D9F7";
+const char* WIFI_SSID     = "TP-Link_D9F7";
 const char* WIFI_PASSWORD = "42209317";
 const char* GLITCH_URL    = "https://alluring-courtesy-production-9b65.up.railway.app";
 const char* USER_ID       = "+46762547179";
@@ -38,10 +39,119 @@ const char* USER_ID       = "+46762547179";
 // Button
 #define BUTTON_PIN      0  // Small button (BOOT)
 
+// ==================== DISPLAY ====================
+Arduino_DataBus *bus = new Arduino_ESP32QSPI(
+    LCD_CS, LCD_SCLK, LCD_SDIO0, LCD_SDIO1, LCD_SDIO2, LCD_SDIO3);
+Arduino_CO5300 *gfx = new Arduino_CO5300(
+    bus, LCD_RESET, 0 /* rotation */, LCD_WIDTH, LCD_HEIGHT, 6, 0, 0, 0);
+
+// Colors (RGB565)
+#define CLR_BG        0x0000  // Black
+#define CLR_PRIMARY   0x07FF  // Cyan
+#define CLR_SUCCESS   0x07E0  // Green
+#define CLR_ERROR     0xF800  // Red
+#define CLR_WARNING   0xFD20  // Orange
+#define CLR_TEXT      0xFFFF  // White
+#define CLR_DIM       0x7BEF  // Gray
+
 // ==================== GLOBALS ====================
 bool recording = false;
 bool wifi_connected = false;
 bool speaker_ready = false;
+bool display_ready = false;
+
+// ==================== DISPLAY HELPERS ====================
+
+void setup_display() {
+    Serial.println("[GLITCH] Initializing AMOLED display...");
+    if (!gfx->begin()) {
+        Serial.println("[GLITCH] Display init failed!");
+        return;
+    }
+    display_ready = true;
+    gfx->fillScreen(CLR_BG);
+    gfx->setBrightness(180);
+    Serial.println("[GLITCH] Display ready (466x466 AMOLED)");
+}
+
+// Draw centered text at y position
+void draw_centered(const char* text, int y, uint16_t color, int size) {
+    if (!display_ready) return;
+    gfx->setTextSize(size);
+    gfx->setTextColor(color, CLR_BG);
+    int16_t x1, y1;
+    uint16_t w, h;
+    gfx->getTextBounds(text, 0, 0, &x1, &y1, &w, &h);
+    gfx->setCursor((LCD_WIDTH - w) / 2, y);
+    gfx->print(text);
+}
+
+// Draw a filled circle (Glitch "eye") at center
+void draw_eye(uint16_t color, int radius) {
+    if (!display_ready) return;
+    int cx = LCD_WIDTH / 2;
+    int cy = LCD_HEIGHT / 2 - 30;
+    gfx->fillCircle(cx, cy, radius, color);
+    // Inner dark circle for pupil
+    gfx->fillCircle(cx, cy, radius / 3, CLR_BG);
+}
+
+// Show status screen
+void show_status(const char* status, uint16_t color) {
+    if (!display_ready) return;
+    gfx->fillScreen(CLR_BG);
+
+    // Draw Glitch eye
+    draw_eye(color, 60);
+
+    // Status text below eye
+    draw_centered(status, LCD_HEIGHT / 2 + 60, color, 3);
+
+    // WiFi indicator at bottom
+    if (wifi_connected) {
+        draw_centered("WiFi OK", LCD_HEIGHT - 60, CLR_SUCCESS, 2);
+    } else {
+        draw_centered("No WiFi", LCD_HEIGHT - 60, CLR_ERROR, 2);
+    }
+}
+
+// Show Glitch response text (word-wrapped)
+void show_response(const char* transcript, const char* reply) {
+    if (!display_ready) return;
+    gfx->fillScreen(CLR_BG);
+
+    // "You said:" header
+    draw_centered("Tu:", 30, CLR_DIM, 2);
+
+    // Transcript (truncated if needed)
+    gfx->setTextSize(2);
+    gfx->setTextColor(CLR_TEXT, CLR_BG);
+    gfx->setTextWrap(true);
+    gfx->setCursor(20, 60);
+    // Truncate to fit screen
+    char trunc[120];
+    strncpy(trunc, transcript, sizeof(trunc) - 1);
+    trunc[sizeof(trunc) - 1] = '\0';
+    gfx->print(trunc);
+
+    // Divider line
+    gfx->drawFastHLine(40, LCD_HEIGHT / 2 - 30, LCD_WIDTH - 80, CLR_PRIMARY);
+
+    // "Glitch:" header
+    gfx->setTextSize(2);
+    gfx->setTextColor(CLR_PRIMARY, CLR_BG);
+    gfx->setCursor(20, LCD_HEIGHT / 2 - 10);
+    gfx->print("Glitch:");
+
+    // Reply text
+    gfx->setTextSize(2);
+    gfx->setTextColor(CLR_TEXT, CLR_BG);
+    gfx->setCursor(20, LCD_HEIGHT / 2 + 20);
+    char reply_trunc[200];
+    strncpy(reply_trunc, reply, sizeof(reply_trunc) - 1);
+    reply_trunc[sizeof(reply_trunc) - 1] = '\0';
+    gfx->print(reply_trunc);
+}
 
 // ==================== WIFI ====================
 void setup_wifi() {
@@ -293,11 +403,15 @@ void play_glitch_beep() {
 void record_and_send() {
     if (!wifi_connected) {
         Serial.println("[GLITCH] No WiFi — cannot send audio");
+        show_status("No WiFi!", CLR_ERROR);
         play_beep(200, 500);  // Low error tone
+        delay(2000);
+        show_status("Ready", CLR_PRIMARY);
         return;
     }
 
     // Recording start beep
+    show_status("Listening...", CLR_SUCCESS);
     play_beep(660, 100);
 
     Serial.println("[GLITCH] Recording...");
@@ -332,6 +446,7 @@ void record_and_send() {
     play_beep(880, 100);
 
     // Send to backend
+    show_status("Thinking...", CLR_PRIMARY);
     Serial.println("[GLITCH] Sending to backend...");
 
     HTTPClient http;
@@ -371,8 +486,10 @@ void record_and_send() {
 
             // Success feedback
             if (strcmp(status, "success") == 0) {
+                show_response(transcript, reply);
                 play_glitch_beep();  // Happy chirp
             } else {
+                show_status("Error", CLR_ERROR);
                 play_beep(330, 300);  // Error tone
             }
         } else {
@@ -384,6 +501,7 @@ void record_and_send() {
         if (httpCode > 0) {
             Serial.printf("[GLITCH] Response: %s\n", http.getString().c_str());
         }
+        show_status("Error", CLR_ERROR);
         play_beep(220, 500);  // Low error tone
     }
 
@@ -412,12 +530,21 @@ void setup() {
     pinMode(PA, OUTPUT);
     digitalWrite(PA, HIGH);
 
-    // I2C bus (shared by ES7210 + ES8311)
+    // I2C bus (shared by ES7210 + ES8311 + touch)
     Wire.begin(IIC_SDA, IIC_SCL);
     delay(200);
 
+    // Initialize display first (visual feedback during boot)
+    setup_display();
+    show_status("Booting...", CLR_PRIMARY);
+
     // Connect WiFi
     setup_wifi();
+    if (wifi_connected) {
+        show_status("WiFi OK", CLR_SUCCESS);
+    } else {
+        show_status("No WiFi", CLR_WARNING);
+    }
 
     // Initialize audio codecs
     setup_microphone();
@@ -425,6 +552,9 @@ void setup() {
 
     // Boot chime
     play_glitch_beep();
+
+    // Show ready screen
+    show_status("Ready", CLR_PRIMARY);
 
     Serial.println("\n[GLITCH] Ready! Press button to talk.");
 }
