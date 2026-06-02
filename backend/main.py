@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Query
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
+from backend.channels.esp32 import router as esp32_router
 from backend.channels.vapi_webhook import router as vapi_router
 from backend.channels.whatsapp import router as whatsapp_router
 from backend.config import settings
@@ -140,6 +141,7 @@ app = FastAPI(title="Glitch Assistant", version="0.1.0", lifespan=lifespan)
 
 app.include_router(whatsapp_router)
 app.include_router(vapi_router)
+app.include_router(esp32_router)
 
 
 @app.get("/audio/{filename}")

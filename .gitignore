@@ -27,3 +27,7 @@ token.json
 *.code-workspace
 
 *.log
+
+# ESP32 / PlatformIO
+esp32_glitch/glitch_firmware/.pio/
+esp32_glitch/waveshare_sdk/
