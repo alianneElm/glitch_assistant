@@ -12,5 +12,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+# Force rebuild: esp32 channel added 2026-06-02
 ENV PORT=8000
 CMD sh -c "uvicorn backend.main:app --host 0.0.0.0 --port ${PORT}"
